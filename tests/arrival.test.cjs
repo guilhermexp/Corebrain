@@ -137,8 +137,18 @@ test("startup does not rewrite legacy notes, while a genuinely new vault create 
   await Promise.resolve();
   assert.equal(legacy.frontmatter.corebrain_added_at, undefined);
 
+  app.workspace.emitLayoutReady();
+  app.vault.emit("create", legacy); // The same TFile remains a startup note.
+  await Promise.resolve();
+  assert.equal(legacy.frontmatter.corebrain_added_at, undefined);
+
   const fresh = await app.vault.create("Clippings/from-uri.md", "---\ntitle: URI\n---\nbody\n");
   await Promise.resolve();
   assertIso(fresh.frontmatter.corebrain_added_at);
   assert.equal(legacy.frontmatter.corebrain_added_at, undefined);
+
+  app.vault.emit("delete", legacy);
+  const recreated = await app.vault.create("Clippings/legacy.md", "---\ntitle: Legacy recreated\n---\nbody\n");
+  await Promise.resolve();
+  assertIso(recreated.frontmatter.corebrain_added_at);
 });

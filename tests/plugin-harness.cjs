@@ -343,6 +343,7 @@ function makeApp(files = []) {
     emit: (...args) => metadataChanged.emit(...args),
     getFileCache: (file) => (file ? { frontmatter: file.frontmatter || {} } : null),
   };
+  const layoutReady = [];
   const workspace = {
     leaves: [],
     on: () => ({ off() {} }),
@@ -351,6 +352,8 @@ function makeApp(files = []) {
     iterateAllLeaves: () => {},
     revealLeaf: () => {},
     getLeaf: () => ({ setViewState: async () => {}, openFile: async () => {} }),
+    onLayoutReady: (fn) => layoutReady.push(fn),
+    emitLayoutReady: () => { for (const fn of layoutReady.splice(0)) fn(); },
   };
   const fileManager = {
     processFrontMatter: async (file, fn) => {

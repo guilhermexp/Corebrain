@@ -343,34 +343,6 @@ function chegadaValida(value) {
   return typeof value === "string" && ISO_CHEGADA.test(value.trim()) && Number.isFinite(Date.parse(value));
 }
 
-function valorYaml(value) {
-  const bruto = String(value || "").trim();
-  if (!bruto) return "";
-  try {
-    const parsed = JSON.parse(bruto);
-    return typeof parsed === "string" ? parsed : bruto;
-  } catch {
-    return bruto.replace(/^['"]|['"]$/g, "");
-  }
-}
-
-/** Fallback used only by test adapters/older vault boundaries without
- * fileManager.processFrontMatter. The closing delimiter and body are kept
- * byte-for-byte; the value is JSON-quoted so it is valid YAML and safe for
- * timestamps containing punctuation. */
-function inserirChegadaYaml(conteudo, timestamp) {
-  const texto = String(conteudo || "");
-  const fm = texto.match(/^(---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))/);
-  if (!fm) {
-    return `---\n${CAMPO_CHEGADA}: ${JSON.stringify(timestamp)}\n---\n${texto}`;
-  }
-  const existente = fm[2].match(new RegExp(`(?:^|\\r?\\n)\\s*${CAMPO_CHEGADA}\\s*:\\s*(.*?)\\s*(?=\\r?\\n|$)`));
-  if (existente && chegadaValida(valorYaml(existente[1]))) return texto;
-  const nl = fm[1].endsWith("\r\n") ? "\r\n" : "\n";
-  const cabecalho = fm[2] ? `${fm[2]}${nl}` : "";
-  return `${fm[1]}${cabecalho}${CAMPO_CHEGADA}: ${JSON.stringify(timestamp)}${fm[3]}${texto.slice(fm[0].length)}`;
-}
-
 /** Hostname cru. No rodape do modo lista "outros" nao diz nada; "vercel.com" diz. */
 function hostDe(source) {
   try {
@@ -2471,12 +2443,21 @@ class ClippingsGallery extends Plugin {
     // genuine vault creations as the fallback, but never rewrite files while
     // the vault is still being enumerated during startup. Capture paths below
     // stamp their own writes explicitly, so this guard cannot lose them.
-    this._chegadaInicial = new Set((this.app.vault.getMarkdownFiles?.() || []).map((f) => f.path));
+    this._chegadaInicial = new Map();
     this._chegadaPronta = false;
     this.registerEvent(this.app.vault.on("create", (file) => {
-      if (!this._chegadaPronta || !file?.path || this._chegadaInicial.has(file.path)) return;
+      if (!this._chegadaPronta || !file?.path || this._chegadaInicial.get(file.path) === file) return;
       void this.registrarChegada(file);
     }));
+    this.registerEvent(this.app.vault.on("delete", (file) => {
+      if (file?.path) this._chegadaInicial.delete(file.path);
+    }));
+    const chegadaAposLayout = () => {
+      this._chegadaInicial = new Map((this.app.vault.getMarkdownFiles?.() || []).map((f) => [f.path, f]));
+      this._chegadaPronta = true;
+    };
+    if (typeof this.app.workspace.onLayoutReady === "function") this.app.workspace.onLayoutReady(chegadaAposLayout);
+    else chegadaAposLayout();
     this.registerView(VIEW, (leaf) => new GaleriaView(leaf, this));
 
     this.addRibbonIcon("layout-grid", "Galeria de clippings", () => this.abrirGaleria());
@@ -2533,7 +2514,6 @@ class ClippingsGallery extends Plugin {
     // Buscas salvas guardam caminhos concretos, entao acompanham renomeacoes
     // para nao virarem uma lista silenciosamente vazia.
     this.registerEvent(this.app.vault.on("rename", (f, antigo) => this.atualizarBuscasRenomeada(f, antigo)));
-    this._chegadaPronta = true;
   }
 
   /** Add an immutable arrival timestamp to one newly-created gallery note.
@@ -2573,17 +2553,7 @@ class ClippingsGallery extends Plugin {
       });
       return mudou;
     }
-
-    // Obsidian provides processFrontMatter, but keep the boundary defensive for
-    // adapters and tests that only expose read/modify.
-    const vault = this.app.vault;
-    const ler = vault.cachedRead || vault.read;
-    if (typeof ler !== "function" || typeof vault.modify !== "function") return false;
-    const antes = await ler.call(vault, file);
-    const depois = inserirChegadaYaml(antes, timestamp);
-    if (depois === antes) return false;
-    await vault.modify(file, depois);
-    return true;
+    return false;
   }
 
   /** Normaliza: aceita "Clippings" ou "Clippings/" e ignora linha vazia. */
