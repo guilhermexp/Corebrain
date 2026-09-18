@@ -1,0 +1,185 @@
+import { describe, expect, it } from "vitest";
+import { ThreadStore } from "../src/threads/thread-store.mjs";
+
+describe("ThreadStore", () => {
+  it("creates a current thread from legacy messages", () => {
+    const store = new ThreadStore(
+      undefined,
+      [{ role: "user", content: "# Hello thread", createdAt: 1 }],
+      "session-1"
+    );
+    const current = store.getCurrentThread();
+
+    expect(current.title).toBe("Hello thread");
+    expect(current.piSessionId).toBe("session-1");
+    expect(store.getCurrentMessages()).toEqual([
+      { role: "user", content: "# Hello thread", createdAt: 1 }
+    ]);
+  });
+
+  it("adds messages and renames new chats from the first user prompt", () => {
+    const store = new ThreadStore();
+    const threadId = store.getCurrentThread().id;
+
+    store.addMessageToThread(threadId, { role: "user", content: "Build a plan", createdAt: 10 });
+
+    expect(store.getCurrentThread()).toMatchObject({ id: threadId, title: "Build a plan" });
+    expect(store.getCurrentMessages()).toEqual([
+      { role: "user", content: "Build a plan", createdAt: 10 }
+    ]);
+  });
+
+  it("prioritizes and toggles favorite threads", () => {
+    const store = new ThreadStore({
+      currentThreadId: "older",
+      threads: [
+        {
+          id: "older",
+          title: "Older",
+          messages: [],
+          createdAt: 1,
+          updatedAt: 1,
+          favorite: true
+        },
+        {
+          id: "newer",
+          title: "Newer",
+          messages: [],
+          createdAt: 2,
+          updatedAt: 2
+        }
+      ]
+    });
+
+    expect(store.listThreads().map((thread) => thread.id)).toEqual(["older", "newer"]);
+    expect(store.toggleThreadFavorite("older")).toBe(true);
+    expect(store.listThreads()[0]).toMatchObject({ id: "older", favorite: false });
+  });
+
+  it("archives a selected set without deleting threads or session references", () => {
+    const store = new ThreadStore({
+      currentThreadId: "one",
+      threads: [
+        {
+          id: "one",
+          title: "One",
+          messages: [],
+          createdAt: 1,
+          updatedAt: 1,
+          piSessionId: "one.jsonl"
+        },
+        {
+          id: "two",
+          title: "Two",
+          messages: [],
+          createdAt: 2,
+          updatedAt: 2,
+          piSessionId: "two.jsonl"
+        }
+      ]
+    });
+
+    expect(store.archiveThreads(["one"])).toEqual(["one"]);
+    expect(store.listThreads({ includeArchived: true })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "one", archived: true, piSessionId: "one.jsonl" }),
+        expect.objectContaining({ id: "two", archived: false, piSessionId: "two.jsonl" })
+      ])
+    );
+  });
+
+  it("bulk deletes selected chats, preserves favorites, and creates an empty replacement", () => {
+    const store = new ThreadStore({
+      currentThreadId: "current",
+      threads: [
+        {
+          id: "current",
+          title: "Current",
+          messages: [{ role: "user", content: "Delete me", createdAt: 1 }],
+          createdAt: 1,
+          updatedAt: 1,
+          piSessionId: "current.jsonl"
+        },
+        {
+          id: "favorite",
+          title: "Favorite",
+          messages: [],
+          createdAt: 2,
+          updatedAt: 2,
+          favorite: true,
+          piSessionId: "favorite.jsonl"
+        }
+      ]
+    });
+
+    expect(store.deleteThreads(["current"])).toEqual({
+      deletedIds: ["current"],
+      createdThreadId: undefined
+    });
+    expect(store.getCurrentThread()).toMatchObject({
+      id: "favorite",
+      favorite: true,
+      piSessionId: "favorite.jsonl"
+    });
+
+    const result = store.deleteThreads(["favorite"]);
+    expect(result.deletedIds).toEqual(["favorite"]);
+    expect(result.createdThreadId).toBeTruthy();
+    expect(store.listThreads({ includeArchived: true })).toEqual([
+      expect.objectContaining({ id: result.createdThreadId, title: "New chat", messages: [] })
+    ]);
+  });
+
+  it("preserves completed thinking and visible tool errors", () => {
+    const store = new ThreadStore();
+    store.addMessage({
+      role: "assistant",
+      content: "answer",
+      createdAt: 1,
+      thinking: "reasoning",
+      toolErrors: ["read failed"]
+    });
+
+    expect(store.getCurrentMessages()[0]).toMatchObject({
+      content: "answer",
+      thinking: "reasoning",
+      toolErrors: ["read failed"]
+    });
+  });
+
+  it("forks, switches, archives, and deletes threads", () => {
+    const store = new ThreadStore();
+    const originalId = store.getCurrentThread().id;
+    store.addMessage({ role: "user", content: "Original", createdAt: 1 });
+
+    const fork = store.forkCurrentThread("portable-clone.jsonl");
+    expect(fork).toMatchObject({
+      title: "Original (fork)",
+      piSessionId: "portable-clone.jsonl",
+      messages: [{ role: "user", content: "Original", createdAt: 1 }]
+    });
+    expect(store.switchThread(originalId)).toBe(true);
+    expect(store.archiveThread(originalId)).toBe(true);
+    expect(store.listThreads().map((thread) => thread.id)).not.toContain(originalId);
+    expect(store.deleteThread(originalId)).toBe(true);
+  });
+
+  it("drops legacy change metadata from messages", () => {
+    const store = new ThreadStore(undefined, [
+      {
+        role: "assistant",
+        content: "done",
+        createdAt: 1,
+        changedFiles: [{ path: "a.md", additions: 1, deletions: 0 }],
+        changeStats: { filesChanged: 1, additions: 1, deletions: 0 },
+        changeSummaries: [{ files: [{ path: "a.md" }], unifiedDiff: "diff" }]
+      }
+    ]);
+
+    expect(store.getCurrentMessages()[0]).toEqual({
+      role: "assistant",
+      content: "done",
+      createdAt: 1
+    });
+  });
+});

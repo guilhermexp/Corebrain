@@ -1,0 +1,23 @@
+# Obsidian/plugin runtime data
+data.json
+pi-sessions/
+
+# Local planning notes
+TODO.md
+
+# Dependencies, generated release files, and local tooling
+node_modules/
+release-notes.md
+pi-agent-*.zip
+obsidian-pi-*.zip
+
+# OS/editor files
+.DS_Store
+.vscode/
+.idea/
+
+/AGENTS.md
+/docs
+/COMPARISON_TASK.md
+/COMPARED_*.md
+/plan
