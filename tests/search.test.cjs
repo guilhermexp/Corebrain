@@ -104,3 +104,8 @@ test('clearing a query does not lose input on the next background metadata refre
  view.contentEl.empty=()=>{throw Error('empty search input destroyed')};
  view.atualizarResultados=()=>updates++;view.render(true);assert.equal(updates,1);
 });
+test('date-only and numeric-looking arrival values are invalid rather than publication dates',()=>{
+ const a=makeFile('Clippings/a.md',{corebrain_added_at:'2099-01-01'});a.stat.ctime=1000;
+ const b=makeFile('Clippings/b.md',{corebrain_added_at:'123'});b.stat.ctime=2000;
+ assert.deepEqual(paths(setup([a,b]).view),[b.path,a.path]);
+});

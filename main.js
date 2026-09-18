@@ -385,7 +385,7 @@ function camposDaBusca(file, fm) {
 }
 function dataDeEntrada(file, fm) {
   const valor = fm.corebrain_added_at;
-  const t = typeof valor === "string" ? Date.parse(valor) : NaN;
+  const t = chegadaValida(valor) ? Date.parse(valor) : NaN;
   return Number.isFinite(t) ? t : Number(file.stat?.ctime) || 0;
 }
 function faixasDaBusca(texto, termos) {
