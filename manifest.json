@@ -1,7 +1,7 @@
 {
   "id": "clippings-gallery",
   "name": "Corebrain",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "minAppVersion": "1.9.0",
   "description": "Corebrain gallery for clipped notes, X bookmarks and model-assisted collections.",
   "author": "Guilherme Varela",

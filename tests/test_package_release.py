@@ -32,13 +32,13 @@ class PackageReleaseTests(unittest.TestCase):
                 {
                     "id": "clippings-gallery",
                     "name": "Corebrain",
-                    "version": "0.3.0",
+                    "version": "0.4.0",
                     "minAppVersion": "1.9.0",
                 }
             ),
             encoding="utf-8",
         )
-        (root / "versions.json").write_text('{"0.3.0":"1.9.0"}\n', encoding="utf-8")
+        (root / "versions.json").write_text('{"0.4.0":"1.9.0"}\n', encoding="utf-8")
         for name, value in {
             "main.js": "module.exports = {};\n",
             "styles.css": ".corebrain {}\n",
@@ -105,7 +105,7 @@ class PackageReleaseTests(unittest.TestCase):
     def test_packages_are_allowlisted_and_have_stable_layout(self) -> None:
         artifacts = package_release.package_release(self.root, self.output)
 
-        plugin_zip = self.output / "Corebrain-plugin-0.3.0.zip"
+        plugin_zip = self.output / "Corebrain-plugin-0.4.0.zip"
         extension_zip = self.output / "Corebrain-extension-chrome-1.8.0.zip"
         self.assertEqual({path.name for path in artifacts}, {plugin_zip.name, extension_zip.name})
 

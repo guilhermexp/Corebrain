@@ -7,7 +7,7 @@ or build them locally as described below.
 
 ## Obsidian plugin (desktop only)
 
-1. Download `Corebrain-plugin-0.3.0.zip` and extract it.
+1. Download `Corebrain-plugin-0.4.0.zip` and extract it.
 2. Copy the contained `clippings-gallery/` directory to
    `<vault>/.obsidian/plugins/`. For a manually downloaded release, copy the
    four standalone root files (`main.js`, `manifest.json`, `styles.css` and
@@ -17,6 +17,11 @@ or build them locally as described below.
 The plugin ID remains `clippings-gallery` for upgrade compatibility. It is
 marked desktop-only because the local bridge uses Node's HTTP APIs; mobile
 Obsidian is not supported.
+
+New captures record their arrival in the immutable `corebrain_added_at`
+property, so the gallery can show newest arrivals first. Existing notes fall
+back to their file creation time; installing this release does not rewrite or
+bulk backfill those notes.
 
 ## Chrome and Edge (unpacked)
 

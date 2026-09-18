@@ -18,12 +18,19 @@ bridge. See [installation](docs/INSTALL.md), the [feature inventory](docs/FEATUR
 
 ## Install
 
-Download the ZIPs from [release v0.3.0](https://github.com/guilhermexp/Corebrain/releases/tag/v0.3.0), or build locally. The
+Download the ZIPs from [release v0.4.0](https://github.com/guilhermexp/Corebrain/releases/tag/v0.4.0), or build locally. The
 plugin archive contains a `clippings-gallery/` directory with only
 `main.js`, `manifest.json`, `styles.css` and `LICENSE`. The same four runtime
 files are also emitted at the release directory root for manual community
 plugin installation (release uploads flatten directories, so root assets are
 intentional).
+
+Corebrain 0.4.0 adds local, all-term search across clipping metadata and
+Markdown body text. Search is case- and accent-insensitive, highlights matches
+without treating note content as HTML, and can show a safe body snippet when a
+match is not present in the visible metadata. Results default to newest arrival
+first. New captures store an immutable `corebrain_added_at` timestamp; older
+notes use their file creation time as a fallback without a bulk backfill.
 
 The browser extension is installed as an unpacked extension in Chrome or Edge;
 Firefox is provided only as an unsigned development build. Follow

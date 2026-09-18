@@ -7,7 +7,15 @@ login and external API availability.
 ## Obsidian plugin
 
 - **Gallery grid and list views** with masonry layout, image-aware cards,
-  sorting, search and adjustable card/row sizing.
+  sorting, search and adjustable card/row sizing. Search is local,
+  case-insensitive and accent-insensitive, requires every term (in any order),
+  and searches title, original metadata, source, basename, tags, author and
+  Markdown body text. Highlights are safe text-node marks, and body-only
+  matches can show a safe snippet when visible metadata has no match.
+- **Arrival-aware ordering**: new captures receive an immutable
+  `corebrain_added_at` timestamp and searches default to newest arrival first.
+  Existing notes use file creation time as a fallback without a bulk backfill;
+  edits, translations and cover changes do not promote an existing note.
 - **Filters and organization** by source, tags, collections and favorites.
   Cards can be dragged into collections; configured collections remain visible
   before they contain a note.

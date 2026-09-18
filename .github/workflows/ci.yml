@@ -33,7 +33,7 @@ jobs:
         run: node test.js
 
       - name: Run Node regression and bridge tests
-        run: node --test tests/plugin-regressions.test.cjs tests/bridge-http.cjs tests/bridge-onload.cjs
+        run: node --test tests/plugin-regressions.test.cjs tests/bridge-http.cjs tests/bridge-onload.cjs tests/search.test.cjs tests/arrival.test.cjs
 
       - name: Run extension tests
         run: npm test --prefix extension

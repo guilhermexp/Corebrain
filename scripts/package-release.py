@@ -24,7 +24,7 @@ from urllib.parse import unquote, urlsplit
 
 PLUGIN_ID = "clippings-gallery"
 PLUGIN_NAME = "Corebrain"
-PLUGIN_VERSION = "0.3.0"
+PLUGIN_VERSION = "0.4.0"
 EXTENSION_NAME = "corebrain-clipper"
 EXTENSION_DISPLAY_NAME = "Corebrain Web Clipper"
 EXTENSION_VERSION = "1.8.0"
