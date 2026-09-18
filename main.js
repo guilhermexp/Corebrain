@@ -363,6 +363,48 @@ function dominio(source) {
  * significaria brigar com o layout dele a cada frame. Aqui a altura e natural
  * (a <img> manda) e o masonry sai de `columns` do CSS, sem JS de layout nenhum.
  */
+function normalizarBusca(texto) {
+  return String(texto ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+function termosDaBusca(texto) {
+  return [...new Set(normalizarBusca(texto).trim().split(/\s+/).filter(Boolean))];
+}
+function camposDaBusca(file, fm) {
+  return [fm.title, fm.description, fm.title_original, fm.description_original,
+    fm.source, file.basename, fm.tags, fm.author, fm.authors].flat(Infinity)
+    .filter((v) => typeof v === "string" || typeof v === "number").join("\n");
+}
+function dataDeEntrada(file, fm) {
+  const valor = fm.corebrain_added_at;
+  const t = typeof valor === "string" ? Date.parse(valor) : NaN;
+  return Number.isFinite(t) ? t : Number(file.stat?.ctime) || 0;
+}
+function faixasDaBusca(texto, termos) {
+  const mapa = []; let normal = "", pos = 0;
+  for (const char of texto) {
+    const n = normalizarBusca(char);
+    for (let i = 0; i < n.length; i++) mapa.push([pos, pos + char.length]);
+    normal += n; pos += char.length;
+  }
+  const faixas = [];
+  for (const termo of termos) {
+    let i = normal.indexOf(termo);
+    while (i >= 0) {
+      let fim = mapa[i + termo.length - 1][1];
+      while (fim < texto.length && /[\u0300-\u036f]/.test(texto[fim])) fim++;
+      faixas.push([mapa[i][0], fim]); i = normal.indexOf(termo, i + termo.length);
+    }
+  }
+  faixas.sort((a, b) => a[0] - b[0]);
+  const juntas = [];
+  for (const faixa of faixas) {
+    const ultima = juntas[juntas.length - 1];
+    if (ultima && faixa[0] <= ultima[1]) ultima[1] = Math.max(ultima[1], faixa[1]);
+    else juntas.push(faixa);
+  }
+  return juntas;
+}
+
 class GaleriaView extends ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -380,7 +422,11 @@ class GaleriaView extends ItemView {
   }
 
   async onOpen() {
+    this._buscaFechada = false;
     this.register(() => {
+      this._buscaFechada = true;
+      clearTimeout(this.tb);
+      this._textoBusca?.clear();
       clearTimeout(this.t);
       this.observador?.disconnect();
       this.medidor?.disconnect();
@@ -434,6 +480,7 @@ class GaleriaView extends ItemView {
       image: fm.image,
       thumb: fm.thumb,
       created: fm.created,
+      corebrain_added_at: fm.corebrain_added_at,
       tags: fm.tags,
       // Texto sem imagem nao importa para a galeria; somente a lista de
       // imagens do corpo participa da projecao. `null` significa que ainda nao
@@ -462,6 +509,12 @@ class GaleriaView extends ItemView {
       corpo = undefined;
     }
     if (!file?.path || !this.plugin.pastas.some((p) => file.path.startsWith(p))) return false;
+    const textoAnterior = this.corpoIndexado(file)?.texto;
+    if (typeof corpo === "string") this.guardarTextoBusca(file, corpo);
+    const buscaMudou = !!termosDaBusca(this.busca).length &&
+      (typeof corpo === "string" && textoAnterior !== corpo || this._camposBusca?.get(file.path) !== camposDaBusca(file, cache?.frontmatter || {}));
+    this._camposBusca ||= new Map();
+    this._camposBusca.set(file.path, camposDaBusca(file, cache?.frontmatter || {}));
     this._corpoGaleria ||= new Map();
     const imagens = this.imagensDoCorpo(corpo);
     if (imagens !== null) this._corpoGaleria.set(file.path, imagens);
@@ -472,7 +525,7 @@ class GaleriaView extends ItemView {
     const antes = this._metadataGaleria?.get(file.path);
     this._metadataGaleria ||= new Map();
     this._metadataGaleria.set(file.path, agora);
-    return antes === undefined || antes !== agora;
+    return buscaMudou || antes === undefined || antes !== agora;
   }
 
   sincronizarMetadata() {
@@ -540,31 +593,104 @@ class GaleriaView extends ItemView {
       .map((f) => ({ f, fm: this.app.metadataCache.getFileCache(f)?.frontmatter || {} }));
   }
 
-  notas() {
-    const busca = (this.busca || "").toLowerCase();
-    const sel = this.plugin.cfg.filtro || { tipo: "tudo" };
-    const lista = this.todas()
-      .filter(({ f, fm }) => {
-        if (sel.tipo === "fonte") return dominio(fm.source) === sel.valor;
-        if (sel.tipo === "tag") return [].concat(fm.tags || []).includes(sel.valor);
-        if (sel.tipo === "busca") return this.plugin.caminhosDaBusca(sel.valor).has(f.path);
-        return true;
-      })
-      .filter(({ f, fm }) =>
-        !busca ||
-        `${fm.title || ""} ${fm.description || ""} ${fm.source || ""} ${f.basename}`
-          .toLowerCase()
-          .includes(busca)
-      );
+  assinaturaBusca(file) {
+    return `${file.stat?.mtime || 0}:${file.stat?.size || 0}:${file.stat?.ctime || 0}`;
+  }
 
-    const data = (x) => String(x.fm.created || "") || "0";
-    const nome = (x) => String(x.fm.title || x.f.basename).toLowerCase();
+  corpoIndexado(file) {
+    const item = this._textoBusca?.get(file.path);
+    return item?.file === file && item.assinatura === this.assinaturaBusca(file) ? item : null;
+  }
+
+  guardarTextoBusca(file, texto, erro = false) {
+    this._textoBusca ||= new Map();
+    const corpo = String(texto).replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "");
+    this._textoBusca.set(file.path, {file, assinatura: this.assinaturaBusca(file), texto: corpo,
+      normal: normalizarBusca(corpo), erro});
+  }
+
+  async indexarBusca() {
+    if (this._buscaFechada || !termosDaBusca(this.busca).length) return;
+    if (this._indexandoBusca) return this._indexandoBusca;
+    const arquivos = this.todas().map(({f}) => f);
+    const vivos = new Set(arquivos.map(f => f.path));
+    for (const path of this._textoBusca?.keys() || []) if (!vivos.has(path)) this._textoBusca.delete(path);
+    const fila = arquivos.filter(f => this.app.vault.getAbstractFileByPath(f.path) === f && !this.corpoIndexado(f));
+    if (!fila.length) return;
+    this.statusBusca?.setText("Buscando no conteúdo…");
+    const ler = async () => {
+      while (fila.length && !this._buscaFechada) {
+        const file = fila.shift(), path = file.path, assinatura = this.assinaturaBusca(file);
+        const anterior = this._textoBusca?.get(path);
+        let texto = "", erro = false;
+        try { texto = await this.app.vault.cachedRead(file); } catch { erro = true; }
+        if (this._buscaFechada || file.path !== path ||
+          this.app.vault.getAbstractFileByPath(path) !== file ||
+          this.assinaturaBusca(file) !== assinatura || this._textoBusca?.get(path) !== anterior) continue;
+        this.guardarTextoBusca(file, texto, erro);
+      }
+    };
+    this._indexandoBusca = Promise.all(Array.from({length: Math.min(8, fila.length)}, ler));
+    try { await this._indexandoBusca; }
+    finally {
+      this._indexandoBusca = null;
+      if (!this._buscaFechada) {
+        this.errosBusca = [...(this._textoBusca?.values() || [])].filter(x => x.erro).length;
+        const buscando = termosDaBusca(this.busca).length > 0;
+        this.statusBusca?.setText(buscando && this.errosBusca ? `${this.errosBusca} nota(s) não puderam ser lidas.` : "");
+        if (buscando) {
+          this.atualizarResultados(true);
+          // A create/rename/modify may have arrived during the asynchronous read.
+          const faltam = this.todas().some(({f}) => this.app.vault.getAbstractFileByPath(f.path) === f && !this.corpoIndexado(f));
+          if (faltam) await this.indexarBusca();
+        }
+      }
+    }
+  }
+
+  notas() {
+    const termos = termosDaBusca(this.busca);
+    const sel = this.plugin.cfg.filtro || { tipo: "tudo" };
+    const lista = this.todas().filter(({ f, fm }) => {
+      if (sel.tipo === "fonte" && dominio(fm.source) !== sel.valor) return false;
+      if (sel.tipo === "tag" && ![].concat(fm.tags || []).includes(sel.valor)) return false;
+      if (sel.tipo === "busca" && !this.plugin.caminhosDaBusca(sel.valor).has(f.path)) return false;
+      if (!termos.length) return true;
+      const texto = normalizarBusca(camposDaBusca(f, fm)) + "\n" + (this.corpoIndexado(f)?.normal || "");
+      return termos.every(t => texto.includes(t));
+    });
+    const nome = x => String(x.fm.title || x.f.basename).toLowerCase();
     const ordens = {
-      recente: (a, b) => data(b).localeCompare(data(a)) || b.f.stat.ctime - a.f.stat.ctime,
-      antigo: (a, b) => data(a).localeCompare(data(b)) || a.f.stat.ctime - b.f.stat.ctime,
+      recente: (a, b) => dataDeEntrada(b.f, b.fm) - dataDeEntrada(a.f, a.fm),
+      antigo: (a, b) => dataDeEntrada(a.f, a.fm) - dataDeEntrada(b.f, b.fm),
       az: (a, b) => nome(a).localeCompare(nome(b)),
     };
-    return lista.sort(ordens[this.plugin.cfg.ordem] || ordens.recente);
+    const ordem = ordens[this.plugin.cfg.ordem] || ordens.recente;
+    return lista.sort((a,b) => ordem(a,b) || a.f.path.localeCompare(b.f.path));
+  }
+
+  destacarBusca(el, texto) {
+    texto = String(texto ?? "");
+    const faixas = faixasDaBusca(texto, termosDaBusca(this.busca));
+    if (!faixas.length) { el.setText(texto); return; }
+    let pos = 0;
+    for (const [inicio, fim] of faixas) {
+      if (inicio > pos) el.createSpan({text: texto.slice(pos, inicio)});
+      el.createEl("mark", {cls: "cg-busca-destaque", text: texto.slice(inicio, fim)});
+      pos = fim;
+    }
+    if (pos < texto.length) el.createSpan({text: texto.slice(pos)});
+  }
+
+  trechoBusca(pai, file, fm, visivel) {
+    const termos = termosDaBusca(this.busca).filter(t => !normalizarBusca(visivel).includes(t));
+    if (!termos.length) return;
+    const texto = `${camposDaBusca(file, fm)}\n${this.corpoIndexado(file)?.texto || ""}`.replace(/\s+/g, " ");
+    const faixa = faixasDaBusca(texto, termos)[0];
+    if (!faixa) return;
+    const inicio = Math.max(0, faixa[0] - 45), fim = Math.min(texto.length, faixa[1] + 115);
+    const el = pai.createDiv({cls: "cg-busca-trecho"});
+    this.destacarBusca(el, (inicio ? "…" : "") + texto.slice(inicio, fim) + (fim < texto.length ? "…" : ""));
   }
 
   /** Grupos derivados do que ja existe no frontmatter — nada pra voce classificar. */
@@ -692,6 +818,19 @@ class GaleriaView extends ItemView {
 
   render(preservar) {
     const c = this.contentEl;
+    // Data can change while typing: leave the toolbar/input connected.
+    if (preservar && termosDaBusca(this.busca).length && c.querySelector(".cg-painel")) {
+      this.atualizarResultados(true);
+      this.sincronizarMetadata();
+      const side = c.querySelector(".cg-side");
+      if (side) {
+        const temporario = document.createElement("div");
+        this.barraLateral(temporario);
+        side.replaceWith(temporario.firstElementChild);
+      }
+      void this.indexarBusca();
+      return;
+    }
     this.cancelarRestauracaoScroll();
     // guardado ANTES do empty(): depois o elemento antigo perde o scroll
     const antigo = c.querySelector(".cg-painel");
@@ -718,10 +857,30 @@ class GaleriaView extends ItemView {
     this.controleOrdem(topo);
     this.controleModo(topo);
 
-    const lista = this.plugin.cfg.modo === "lista";
     this.controleTamanho(topo);
     this.botaoAdicionar(topo);
 
+    this.renderResultados(painel, notas, jaMostradas, rolagem);
+    if (termosDaBusca(this.busca).length) void this.indexarBusca();
+
+    this.aceitarSolto(painel);
+  }
+
+  atualizarResultados(preservar = false) {
+    const painel = this.contentEl.querySelector(".cg-painel");
+    if (!painel || this._buscaFechada) return;
+    const rolagem = preservar ? painel.scrollTop : 0;
+    const mostradas = preservar ? this.mostradas || 0 : 0;
+    this.cancelarRestauracaoScroll();
+    this.grade?.remove(); this.sentinela?.remove(); this.vazioBusca?.remove();
+    const notas = this.notas();
+    this.contentEl.querySelector(".cg-total")?.setText(`${notas.length} clippings`);
+    this.renderResultados(painel, notas, mostradas, rolagem);
+    if (!preservar) painel.scrollTop = 0;
+  }
+
+  renderResultados(painel, notas, jaMostradas, rolagem) {
+    const lista = this.plugin.cfg.modo === "lista";
     this.grade = painel.createDiv({ cls: lista ? "cg-lista" : "cg-masonry" });
     this.colunas = null;
     if (!lista) this.montarColunas();
@@ -758,7 +917,7 @@ class GaleriaView extends ItemView {
       this.medidor.observe(painel);
     }
 
-    this.aceitarSolto(painel);
+    if (!notas.length) this.vazioBusca = painel.createDiv({cls: "cg-busca-vazia", text: "Nenhum clipping encontrado."});
   }
 
   /** Proximo lote no DOM. O observador chama de novo enquanto a sentinela
@@ -794,6 +953,9 @@ class GaleriaView extends ItemView {
     if (this.colunas && this.colunas.length === n) return false;
 
     const cards = this.colunas ? [...this.grade.querySelectorAll(".cg-card")] : [];
+    const ordem = new Map((this.fila || []).map(({f}, i) => [f.path, i]));
+    cards.sort((a, b) => (ordem.get(a.getAttribute("data-cg-path")) ?? Infinity) -
+      (ordem.get(b.getAttribute("data-cg-path")) ?? Infinity));
     // Guarda em QUAL card voce estava, nao o scrollTop: com outra quantidade de
     // colunas a altura toda muda, entao o mesmo scrollTop cai em outro conteudo.
     const painel = this.grade.parentElement;
@@ -886,24 +1048,23 @@ class GaleriaView extends ItemView {
   controleBusca(topo) {
     const inp = topo.createEl("input", {
       cls: "cg-busca",
-      attr: { type: "search", placeholder: "Buscar…", value: this.busca || "" },
+      attr: { type: "search", placeholder: "Buscar nas notas…", "aria-label": "Buscar nas notas", value: this.busca || "" },
     });
     inp.addEventListener("input", () => {
       this.busca = inp.value;
       clearTimeout(this.tb);
-      // re-render completo: com debounce, digitar nao repinta 91 cards por tecla
       this.tb = setTimeout(() => {
-        this.render();
-        const novo = this.contentEl.querySelector(".cg-busca");
-        novo.focus();
-        novo.setSelectionRange(novo.value.length, novo.value.length);
-      }, 250);
+        this.atualizarResultados();
+        if (termosDaBusca(this.busca).length) void this.indexarBusca();
+        else this.statusBusca?.setText("");
+      }, 180);
     });
+    this.statusBusca = topo.createSpan({cls: "cg-busca-status", attr: {role: "status", "aria-live": "polite"}});
   }
 
   controleOrdem(topo) {
     const sel = topo.createEl("select", { cls: "cg-ordem dropdown" });
-    for (const [v, txt] of [["recente", "Mais recentes"], ["antigo", "Mais antigos"], ["az", "A–Z"]]) {
+    for (const [v, txt] of [["recente", "Adicionados recentemente"], ["antigo", "Adicionados há mais tempo"], ["az", "A–Z"]]) {
       sel.createEl("option", { value: v, text: txt });
     }
     sel.value = this.plugin.cfg.ordem || "recente";
@@ -1048,7 +1209,7 @@ class GaleriaView extends ItemView {
   }
 
   card(grade, file, fm) {
-    const card = grade.createDiv({ cls: "cg-card" });
+    const card = grade.createDiv({ cls: "cg-card", attr: {"data-cg-path": file.path} });
     this.abrirAoClicar(card, file, fm);
     this.tornarArrastavel(card, file);
     this.acoes(card, file, fm);
@@ -1070,7 +1231,9 @@ class GaleriaView extends ItemView {
 
     // so uma linha de texto: o title do clipper quase sempre repete a description
     const leg = card.createDiv({ cls: "cg-legenda" });
-    leg.createDiv({ cls: "cg-desc", text: fm.description || fm.title || file.basename });
+    const visivel = fm.description || fm.title || file.basename;
+    this.destacarBusca(leg.createDiv({ cls: "cg-desc" }), visivel);
+    this.trechoBusca(leg, file, fm, visivel);
   }
 
   /** Modo lista, no formato do obsidian-link-cards: miniatura a esquerda, titulo,
@@ -1104,9 +1267,10 @@ class GaleriaView extends ItemView {
 
     const titulo = fm.title || file.basename;
     const txt = row.createDiv({ cls: "cg-linha-txt" });
-    txt.createDiv({ cls: "cg-linha-titulo", text: titulo });
+    this.destacarBusca(txt.createDiv({ cls: "cg-linha-titulo" }), titulo);
     const resto = restoDaDescricao(titulo, fm.description);
-    if (resto) txt.createDiv({ cls: "cg-linha-desc", text: resto });
+    if (resto) this.destacarBusca(txt.createDiv({ cls: "cg-linha-desc" }), resto);
+    this.trechoBusca(txt, file, fm, `${titulo} ${resto || ""}`);
 
     const pe = txt.createDiv({ cls: "cg-linha-pe" });
     pe.appendChild(logoFonte(dominio(fm.source)));

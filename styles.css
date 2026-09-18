@@ -809,3 +809,25 @@
   opacity: 1;
   color: var(--text-error);
 }
+
+/* Local search: text-only highlights, readable in both light and dark themes. */
+.cg-busca-destaque {
+  background: var(--text-highlight-bg);
+  color: var(--text-normal);
+  border-radius: 2px;
+  padding: 0;
+}
+.cg-busca-trecho {
+  color: var(--text-muted);
+  font-size: var(--font-smallest);
+  line-height: 1.5;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cg-busca-status { font-size: var(--font-smallest); color: var(--text-muted); }
+.cg-busca-status:empty { display: none; }
+.cg-busca-vazia { padding: 24px; color: var(--text-muted); }
