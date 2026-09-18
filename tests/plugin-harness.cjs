@@ -309,7 +309,7 @@ function makeFile(path, frontmatter = {}, body = "") {
 
 function makeApp(files = []) {
   const metadataChanged = new EventBus();
-  const vaultEvents = { modify: new EventBus(), delete: new EventBus(), rename: new EventBus() };
+  const vaultEvents = { modify: new EventBus(), delete: new EventBus(), rename: new EventBus(), create: new EventBus() };
   const allFiles = [...files];
   const stored = new Map(allFiles.map((f) => [f.path, f]));
   const binary = new Map();
@@ -325,9 +325,11 @@ function makeApp(files = []) {
       return f;
     },
     create: async (path, body) => {
-      const f = makeFile(path, {}, body);
+      const arrival = String(body || "").match(/^---\r?\n[\s\S]*?^corebrain_added_at:\s*["']?([^\r\n"']+)["']?\s*$/m);
+      const f = makeFile(path, arrival ? { corebrain_added_at: arrival[1] } : {}, body);
       allFiles.push(f);
       stored.set(path, f);
+      vaultEvents.create.emit(f);
       return f;
     },
     read: async (file) => file.body || "",
@@ -397,6 +399,7 @@ function loadMain({ requestUrl = async () => ({ text: "", json: {}, status: 200 
     window: { open() {} },
     navigator: { clipboard: { writeText: async () => {} } },
     URL,
+    Buffer,
     Blob: global.Blob,
     OffscreenCanvas: global.OffscreenCanvas,
     createImageBitmap: global.createImageBitmap,
@@ -408,7 +411,7 @@ function loadMain({ requestUrl = async () => ({ text: "", json: {}, status: 200 
     Math,
     Date,
   };
-  const instrumented = `${source}\nmodule.exports = {\n  ClippingsGallery: module.exports,\n  GaleriaView,\n  Classificador,\n  Tradutor,\n  capaComRetentativa,\n  PADRAO,\n};`;
+  const instrumented = `${source}\nmodule.exports = {\n  ClippingsGallery: module.exports,\n  GaleriaView,\n  Classificador,\n  Tradutor,\n  Receptor,\n  capaComRetentativa,\n  PADRAO,\n};`;
   vm.runInNewContext(instrumented, sandbox, { filename: "main.js" });
   return { internals: sandbox.module.exports, notices: FakeNotice.all, FakeElement, FakeImage, FakeClock };
 }

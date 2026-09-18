@@ -334,6 +334,43 @@ function normalizarSource(s) {
   return String(s === null || s === undefined ? "" : s).trim().replace(/^<|>$/g, "");
 }
 
+const CAMPO_CHEGADA = "corebrain_added_at";
+const ISO_CHEGADA = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/;
+
+/** Arrival is an event timestamp, not a date-only source field. Keep valid
+ * values exactly as authored; only a missing/invalid value is replaced. */
+function chegadaValida(value) {
+  return typeof value === "string" && ISO_CHEGADA.test(value.trim()) && Number.isFinite(Date.parse(value));
+}
+
+function valorYaml(value) {
+  const bruto = String(value || "").trim();
+  if (!bruto) return "";
+  try {
+    const parsed = JSON.parse(bruto);
+    return typeof parsed === "string" ? parsed : bruto;
+  } catch {
+    return bruto.replace(/^['"]|['"]$/g, "");
+  }
+}
+
+/** Fallback used only by test adapters/older vault boundaries without
+ * fileManager.processFrontMatter. The closing delimiter and body are kept
+ * byte-for-byte; the value is JSON-quoted so it is valid YAML and safe for
+ * timestamps containing punctuation. */
+function inserirChegadaYaml(conteudo, timestamp) {
+  const texto = String(conteudo || "");
+  const fm = texto.match(/^(---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))/);
+  if (!fm) {
+    return `---\n${CAMPO_CHEGADA}: ${JSON.stringify(timestamp)}\n---\n${texto}`;
+  }
+  const existente = fm[2].match(new RegExp(`(?:^|\\r?\\n)\\s*${CAMPO_CHEGADA}\\s*:\\s*(.*?)\\s*(?=\\r?\\n|$)`));
+  if (existente && chegadaValida(valorYaml(existente[1]))) return texto;
+  const nl = fm[1].endsWith("\r\n") ? "\r\n" : "\n";
+  const cabecalho = fm[2] ? `${fm[2]}${nl}` : "";
+  return `${fm[1]}${cabecalho}${CAMPO_CHEGADA}: ${JSON.stringify(timestamp)}${fm[3]}${texto.slice(fm[0].length)}`;
+}
+
 /** Hostname cru. No rodape do modo lista "outros" nao diz nada; "vercel.com" diz. */
 function hostDe(source) {
   try {
@@ -1918,7 +1955,8 @@ class Receptor {
     let caminho = `${dir}/${base}.md`;
     for (let i = 2; vault.getAbstractFileByPath(caminho); i++) caminho = `${dir}/${base} (${i}).md`;
 
-    await vault.create(caminho, conteudo);
+    const file = await vault.create(caminho, conteudo);
+    await this.plugin.registrarChegada?.(file);
     this.plugin.app.workspace.getLeavesOfType(VIEW).forEach((l) => l.view.render?.());
     return { ok: true, duplicata: false, caminho };
   }
@@ -1979,7 +2017,8 @@ class Receptor {
           pulados++;
         } else {
           const caminho = caminhoLivre(sanitizar(b.nome));
-          await vault.create(caminho, b.conteudo);
+          const file = await vault.create(caminho, b.conteudo);
+          await this.plugin.registrarChegada?.(file);
           caminhos.add(caminho);
           if (source) sources.add(source);
           criados++;
@@ -2428,6 +2467,16 @@ class ClippingsGallery extends Plugin {
       await this.saveData(this.cfg);
     }
     this.aplicarPastas();
+    // A normal obsidian:// URI can create a note without the clipper. Observe
+    // genuine vault creations as the fallback, but never rewrite files while
+    // the vault is still being enumerated during startup. Capture paths below
+    // stamp their own writes explicitly, so this guard cannot lose them.
+    this._chegadaInicial = new Set((this.app.vault.getMarkdownFiles?.() || []).map((f) => f.path));
+    this._chegadaPronta = false;
+    this.registerEvent(this.app.vault.on("create", (file) => {
+      if (!this._chegadaPronta || !file?.path || this._chegadaInicial.has(file.path)) return;
+      void this.registrarChegada(file);
+    }));
     this.registerView(VIEW, (leaf) => new GaleriaView(leaf, this));
 
     this.addRibbonIcon("layout-grid", "Galeria de clippings", () => this.abrirGaleria());
@@ -2484,6 +2533,57 @@ class ClippingsGallery extends Plugin {
     // Buscas salvas guardam caminhos concretos, entao acompanham renomeacoes
     // para nao virarem uma lista silenciosamente vazia.
     this.registerEvent(this.app.vault.on("rename", (f, antigo) => this.atualizarBuscasRenomeada(f, antigo)));
+    this._chegadaPronta = true;
+  }
+
+  /** Add an immutable arrival timestamp to one newly-created gallery note.
+   *  The per-path promise also coalesces the create event with the explicit
+   *  capture-path call, preventing a second frontmatter write. */
+  registrarChegada(file) {
+    const caminho = String(file?.path || "");
+    if (!caminho.endsWith(".md") || !this.pastas?.some((p) => caminho.startsWith(p))) return Promise.resolve(false);
+    this._chegadaJobs ||= new Map();
+    const pendente = this._chegadaJobs.get(caminho);
+    if (pendente) return pendente;
+
+    const trabalho = this._registrarChegada(file)
+      .catch((e) => {
+        console.error("clippings-gallery: nao consegui registrar chegada em", caminho, e);
+        return false;
+      })
+      .finally(() => {
+        if (this._chegadaJobs.get(caminho) === trabalho) this._chegadaJobs.delete(caminho);
+      });
+    this._chegadaJobs.set(caminho, trabalho);
+    return trabalho;
+  }
+
+  async _registrarChegada(file) {
+    const cache = this.app.metadataCache?.getFileCache?.(file)?.frontmatter || file.frontmatter || {};
+    if (chegadaValida(cache[CAMPO_CHEGADA])) return false;
+    const timestamp = new Date().toISOString();
+    let mudou = false;
+
+    if (this.app.fileManager?.processFrontMatter) {
+      await this.app.fileManager.processFrontMatter(file, (fm) => {
+        if (!chegadaValida(fm[CAMPO_CHEGADA])) {
+          fm[CAMPO_CHEGADA] = timestamp;
+          mudou = true;
+        }
+      });
+      return mudou;
+    }
+
+    // Obsidian provides processFrontMatter, but keep the boundary defensive for
+    // adapters and tests that only expose read/modify.
+    const vault = this.app.vault;
+    const ler = vault.cachedRead || vault.read;
+    if (typeof ler !== "function" || typeof vault.modify !== "function") return false;
+    const antes = await ler.call(vault, file);
+    const depois = inserirChegadaYaml(antes, timestamp);
+    if (depois === antes) return false;
+    await vault.modify(file, depois);
+    return true;
   }
 
   /** Normaliza: aceita "Clippings" ou "Clippings/" e ignora linha vazia. */
@@ -2740,6 +2840,7 @@ class ClippingsGallery extends Plugin {
       for (let i = 2; this.app.vault.getAbstractFileByPath(caminho); i++) caminho = `${pasta}/${nome} (${i}).md`;
 
       const file = await this.app.vault.create(caminho, conteudo);
+      await this.registrarChegada(file);
       aviso?.hide();
       diga(og.titulo ? `Adicionado: ${og.titulo.slice(0, 60)}` : "Link adicionado.", 5000);
       if (!silencioso) this.app.workspace.getLeavesOfType(VIEW).forEach((l) => l.view.render?.());
