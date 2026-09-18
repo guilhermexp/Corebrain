@@ -1,0 +1,75 @@
+/**
+ * Tema Geist (dark) — Vercel design system.
+ *
+ * Nao reescreve componente nenhum: remapeia a escala `--color-base-*` da qual
+ * todo o resto do CSS ja deriva. Por isso este arquivo entra por ULTIMO, e por
+ * isso mudar uma linha aqui muda a extensao inteira.
+ *
+ * Escala do projeto: base-00 = fundo, base-100 = texto. Mapeamento Geist:
+ *   canvas #0a0a0a · elevated #111 · hairline #2e2e2e
+ *   ink #ededed · body #a1a1a1 · mute #8f8f8f · faint #666
+ */
+
+:root {
+	/* dark sempre: o sistema e monocromatico por design, nao tem versao clara equivalente */
+	color-scheme: dark;
+
+	/* Geist Sans/Mono nao vem instalada; system-ui cai no SF no macOS, que e o
+	   substituto mais proximo sem embutir ~400KB de webfont. */
+	--font-default: "Geist Sans", "Geist", Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+	--font-interface: var(--font-default);
+	--font-monospace: "Geist Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+	/* azul Vercel (#0070f3), no tom que ele assume em fundo escuro (#3291ff) */
+	--accent-h: 212;
+	--accent-s: 100%;
+	--accent-l: 60%;
+
+	/* Geist e bimodal: 6px no chrome funcional, 12px em card */
+	--radius-s: 6px;
+	--radius-m: 8px;
+	--radius-l: 12px;
+}
+
+@media (prefers-color-scheme: light), (prefers-color-scheme: dark) {
+	:root {
+		--color-base-00: #0a0a0a; /* canvas */
+		--color-base-05: #0f0f0f;
+		--color-base-10: #111111; /* elevated */
+		--color-base-20: #161616;
+		--color-base-25: #2e2e2e; /* hairline — a borda de 1px que estrutura tudo */
+
+		--color-base-30: #383838;
+		--color-base-35: #454545;
+		--color-base-40: #555555;
+
+		--color-base-50: #666666; /* faint */
+		--color-base-60: #8f8f8f; /* mute */
+		--color-base-70: #a1a1a1; /* body */
+		--color-base-100: #ededed; /* ink */
+
+		/* profundidade e 1px de hairline; sombra so como sussurro */
+		--input-shadow: 0 1px 1px rgba(0, 0, 0, 0.28);
+		--input-shadow-hover: 0 1px 2px rgba(0, 0, 0, 0.36);
+
+		--background-modifier-hover: rgba(255, 255, 255, 0.06);
+		--background-modifier-cover: rgba(0, 0, 0, 0.6);
+	}
+}
+
+/* tracking negativo do display: quanto maior o titulo, mais apertado */
+h1 {
+	letter-spacing: -0.05em;
+	font-weight: 600;
+}
+
+h2 {
+	letter-spacing: -0.04em;
+	font-weight: 600;
+}
+
+h3,
+h4 {
+	letter-spacing: -0.02em;
+	font-weight: 600;
+}

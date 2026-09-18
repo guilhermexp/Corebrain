@@ -1,0 +1,811 @@
+/* ---------- galeria masonry (view propria do plugin) ---------- */
+
+.cg-view {
+  position: relative; /* ancora o "+" flutuante */
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* ---------- sidebar interna ---------- */
+
+.cg-side {
+  flex: 0 0 200px;
+  padding: 16px 10px 40px;
+  overflow-y: auto;
+  border-inline-end: 1px solid var(--background-modifier-border);
+  transition: margin-inline-start 160ms ease;
+}
+
+.cg-side-fechada .cg-side {
+  margin-inline-start: -200px; /* colapsa deslizando, sem sumir do fluxo */
+}
+
+.cg-secao {
+  margin: 16px 0 4px;
+  padding-inline-start: 8px;
+  font-size: var(--font-ui-smaller);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+
+.cg-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.cg-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.cg-item.cg-ativo {
+  color: var(--text-normal);
+  background: var(--background-modifier-active-hover, var(--background-secondary));
+  font-weight: var(--font-medium);
+}
+
+.cg-num {
+  margin-inline-start: auto;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+
+.cg-vazio {
+  padding: 4px 8px;
+  font-size: var(--font-ui-smaller);
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+.cg-toggle {
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 5px;
+  color: var(--text-faint);
+}
+
+.cg-toggle:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.cg-painel {
+  flex: 1;
+  min-width: 0;
+  padding: 16px 20px 40px;
+  overflow-y: auto;
+}
+
+.cg-topo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.cg-total {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+}
+
+.cg-busca {
+  flex: 1;
+  max-width: 280px;
+  margin-inline-start: auto; /* empurra os controles pra direita */
+  height: 28px;
+  font-size: var(--font-ui-smaller);
+}
+
+.cg-ordem {
+  height: 28px;
+  font-size: var(--font-ui-smaller);
+}
+
+.cg-ctrl {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-faint);
+}
+
+.cg-ctrl-icone {
+  font-size: 7px;
+  line-height: 1;
+}
+
+.cg-ctrl-icone.cg-grande {
+  font-size: 13px;
+}
+
+.cg-range {
+  width: 110px;
+  accent-color: var(--interactive-accent);
+  cursor: pointer;
+}
+
+/* Colunas como elementos, nao `columns` do CSS. O `columns` rebalanceia tudo a
+   cada card acrescentado, entao com carregamento por rolagem os cards ja vistos
+   pulavam de lugar. Quem conta as colunas e o montarColunas(); --cg-col decide
+   quantas cabem, e o flex divide a largura que sobra. */
+.cg-masonry {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.cg-coluna {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.cg-card {
+  margin-bottom: 22px;
+  cursor: pointer;
+}
+
+.cg-moldura {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--background-secondary);
+  line-height: 0;
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.cg-card:hover .cg-moldura {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.cg-foto {
+  width: 100%;
+  height: auto; /* a altura natural e o que gera o escalonamento do masonry */
+  display: block;
+}
+
+.cg-quebrada {
+  min-height: 120px;
+}
+
+.cg-quebrada .cg-foto {
+  display: none;
+}
+
+/* card das notas cujo site nao publica imagem nenhuma */
+.cg-so-texto .cg-marca {
+  display: grid;
+  place-items: center;
+  height: 96px;
+  border-radius: 12px;
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  background: var(--background-secondary);
+}
+
+.cg-legenda {
+  padding: 9px 2px 0;
+  line-height: 1.35;
+}
+
+.cg-desc {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ---------- acoes do overlay (favoritar / apagar) ---------- */
+
+.cg-card,
+.cg-linha {
+  position: relative; /* ancora as acoes */
+}
+
+.cg-acoes {
+  position: absolute;
+  top: 10px;
+  inset-inline-start: 10px;
+  z-index: 4;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.cg-card:hover .cg-acoes,
+.cg-linha:hover .cg-acoes {
+  opacity: 1;
+}
+
+/* ja favoritado tem que ficar visivel sem hover, senao nao da pra ver quais sao */
+.cg-acoes:has(.cg-fav) {
+  opacity: 1;
+}
+
+.cg-acoes:has(.cg-fav) .cg-apagar {
+  opacity: 0; /* mas a lixeira nao: so no hover, pra nao convidar ao clique */
+}
+
+.cg-card:hover .cg-apagar,
+.cg-linha:hover .cg-apagar {
+  opacity: 1;
+}
+
+.cg-acao {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  cursor: pointer;
+  transition: transform 120ms ease, background 120ms ease, opacity 120ms ease;
+}
+
+.cg-acao:hover {
+  transform: scale(1.12);
+}
+
+.cg-acao svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* estrela vazia enquanto nao e favorito; cheia e amarela quando e */
+.cg-estrela:not(.cg-fav) svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+}
+
+.cg-estrela.cg-fav {
+  color: #f5c518;
+}
+
+/* lixeira e so contorno, e so fica vermelha no hover: acao destrutiva nao
+   deve chamar atencao antes de voce mirar nela */
+.cg-apagar svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cg-apagar:hover {
+  background: #b3261e;
+}
+
+/* ---------- criar colecao / arrastar card pra ela ---------- */
+
+.cg-secao-acao {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-inline-end: 4px;
+}
+
+.cg-mais {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.cg-mais:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.cg-mais svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* fora do fluxo enquanto fechado, senao sobra um vao entre o titulo e a lista */
+.cg-nova {
+  display: none;
+  width: calc(100% - 16px);
+  margin: 4px 8px 6px;
+  height: 26px;
+  font-size: var(--font-ui-smaller);
+}
+
+.cg-criando .cg-nova {
+  display: block;
+}
+
+/* alvo de soltar um card */
+.cg-item.cg-alvo {
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+}
+
+.cg-item.cg-alvo .cg-num,
+.cg-item.cg-alvo .cg-logo {
+  color: inherit;
+  opacity: 1;
+}
+
+.cg-card.cg-arrastando,
+.cg-linha.cg-arrastando {
+  opacity: 0.4;
+}
+
+/* ---------- botao flutuante de adicionar link ---------- */
+
+/* ancora do campo, que e absoluto e desce por baixo do botao */
+.cg-fab {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+
+.cg-fab-btn {
+  width: 28px; /* mesma altura dos outros controles da barra */
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--background-primary);
+  background: var(--text-normal);
+  cursor: pointer;
+  transition: transform 140ms ease;
+}
+
+.cg-fab-btn:hover {
+  transform: scale(1.08);
+}
+
+.cg-fab-aberto .cg-fab-btn {
+  transform: rotate(45deg); /* o "+" vira "x": o mesmo botao fecha */
+}
+
+/* fecha animando a largura, nao o display: assim o foco nao pula */
+.cg-fab-input {
+  position: absolute;
+  top: calc(100% + 10px);
+  inset-inline-end: 0;
+  z-index: 6;
+  width: 0;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none; /* fechado nao intercepta clique no que esta atras */
+  border-radius: 20px;
+  background: var(--background-secondary);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+  transition: width 200ms ease, opacity 140ms ease, padding 200ms ease;
+}
+
+.cg-fab-aberto .cg-fab-input {
+  width: min(380px, 46vw);
+  padding: 0 18px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* alvo de arrastar */
+.cg-soltar {
+  outline: 2px dashed var(--interactive-accent);
+  outline-offset: -10px;
+  border-radius: 12px;
+}
+
+/* ---------- modo lista (formato link-cards) ---------- */
+
+.cg-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cg-linha {
+  display: flex;
+  /* altura fixa de proposito: com `min-height` a altura natural da <img> vaza pro
+     row e cada linha fica de um tamanho. Aqui a capa e que se ajusta (cover).
+     O slider mexe so nesta var. */
+  height: var(--cg-linha, 210px);
+  /* sem borda e sem `overflow: hidden`. Com o recorte no row, so os cantos da
+     ESQUERDA da capa pegavam o raio — os da direita sao interiores e ficavam
+     quadrados. Quem arredonda agora e a propria capa, nos quatro cantos. */
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+
+.cg-linha:hover {
+  background: var(--background-secondary);
+}
+
+/* Sem proporcao fixa, e de proposito: a altura vem da linha e a LARGURA vem da
+   imagem. Assim nada e cortado — poster fica estreito, screenshot fica largo,
+   cada capa com a sua forma. Era o que faltava; fixar a proporcao (qualquer uma)
+   obrigava o `cover` a descartar ~22% de cada imagem. */
+.cg-linha-capa {
+  flex: 0 0 auto;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--cg-linha, 210px); /* piso quadrado enquanto a imagem carrega */
+  max-width: 46%; /* painel estreito: a capa nao pode engolir o texto */
+  /* herda o raio de .cg-moldura (12px, quatro cantos) — nao zerar aqui */
+}
+
+.cg-linha-capa .cg-foto {
+  height: 100%;
+  width: auto; /* <- o ponto: a largura segue a proporcao natural */
+  max-width: 100%; /* panorama extremo: ai sim o cover recorta */
+  object-fit: cover;
+}
+
+.cg-linha-capa.cg-so-texto .cg-marca {
+  height: 100%;
+  width: 100%;
+}
+
+.cg-linha-txt {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 15px 18px;
+}
+
+.cg-linha-titulo {
+  font-weight: var(--font-semibold, 600);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cg-linha-desc {
+  font-size: var(--font-ui-small);
+  line-height: 1.45;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cg-linha-pe {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto; /* cola no rodape mesmo sem descricao */
+  padding-top: 6px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+
+
+/* ---------- carrossel ---------- */
+
+.cg-seta,
+.cg-contador {
+  position: absolute;
+  opacity: 0;
+  transition: opacity 120ms ease-in-out;
+  line-height: 1;
+}
+
+.cg-moldura:hover .cg-seta,
+.cg-moldura:hover .cg-contador {
+  opacity: 1;
+}
+
+.cg-seta {
+  top: 50%;
+  translate: 0 -50%;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  border-radius: 50%;
+  color: var(--text-normal);
+  background: var(--background-primary);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+}
+
+.cg-seta:hover {
+  background: var(--background-modifier-hover);
+}
+
+.cg-prev {
+  inset-inline-start: 8px;
+}
+
+.cg-next {
+  inset-inline-end: 8px;
+}
+
+.cg-contador {
+  top: 8px;
+  inset-inline-end: 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: var(--font-ui-smaller);
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+/* logo da fonte na sidebar */
+.cg-logo {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  opacity: 0.75;
+}
+
+.cg-item.cg-ativo .cg-logo {
+  opacity: 1;
+}
+
+.cg-rotulo {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* nome da nota no aviso de duplicata */
+.cg-aviso-nome {
+  margin: 4px 0 8px;
+  font-weight: var(--font-semibold, 600);
+  word-break: break-word;
+}
+
+/* alvo do IntersectionObserver: precisa ter altura pra ser observavel */
+.cg-sentinela {
+  height: 1px;
+  margin-top: 8px;
+}
+
+/* ---- Ficha (overlay do clique no card) ---- */
+/* larga de proposito: a capa e o motivo do overlay existir */
+.cg-ficha-modal {
+  /* tela cheia, como o preview do Recollect: a capa e o motivo do overlay
+     existir, entao tudo que sobra de moldura tira espaco dela */
+  width: 100vw;
+  max-width: 100vw;
+  height: 100vh;
+  /* o Modal do Obsidian traz max-height: 85%, que deixava 175px de sobra */
+  max-height: 100vh;
+  border-radius: 0;
+  padding: 0;
+}
+.cg-ficha-modal .modal-content {
+  display: flex;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+.cg-ficha-capa {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* quase preto de proposito: e o fundo atras da imagem, e cinza medio
+     (--background-secondary-alt dava #333) faz a capa parecer desbotada */
+  background: #0c0c0c;
+  padding: 24px;
+}
+/* contain, nao cover: aqui o objetivo e ver a imagem inteira. O card corta
+   porque precisa de grade regular; a ficha nao tem essa restricao. */
+/* 100% em vez de max-*: assim a capa tambem CRESCE ate encher a area, que e o
+   que o Recollect faz. Com max-* uma og:image de 1200x600 ficava no tamanho
+   natural e sobrava metade da tela vazia. contain preserva a proporcao. */
+.cg-ficha-capa img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+}
+.cg-ficha-lado {
+  flex: 0 0 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 28px 24px;
+  overflow-y: auto;
+  border-left: 1px solid var(--background-modifier-border);
+}
+.cg-ficha-titulo {
+  font-size: 1.15em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.cg-ficha-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+.cg-ficha-meta .cg-logo {
+  width: 15px;
+  height: 15px;
+}
+.cg-ficha-data {
+  margin-left: auto;
+}
+.cg-ficha-desc {
+  font-size: 0.9em;
+  line-height: 1.5;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+.cg-ficha-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.cg-chip {
+  font-size: 0.78em;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+.cg-ficha-botoes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: auto; /* colam no rodape, nao ficam boiando sob descricao curta */
+  padding-top: 12px;
+}
+.cg-ficha-bt {
+  width: 100%;
+  cursor: pointer;
+}
+.cg-ficha-fav.cg-fav {
+  color: var(--color-yellow);
+}
+.cg-ficha-apagar:hover {
+  color: var(--text-on-accent);
+  background: var(--text-error);
+}
+/* numa janela estreita a capa e a ficha lado a lado nao cabem */
+@media (max-width: 900px) {
+  .cg-ficha-modal .modal-content { flex-direction: column; }
+  .cg-ficha-lado { flex: 0 0 auto; border-left: none; border-top: 1px solid var(--background-modifier-border); }
+}
+
+/* backdrop: escuro e com blur, senao a galeria atras compete com a ficha */
+.cg-ficha-caixa .modal-bg {
+  background: rgba(6, 6, 6, 0.72);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+/* URL do clipping: quebra em qualquer ponto porque link nao tem espaco pra
+   quebrar sozinho e estouraria a coluna de 340px */
+.cg-ficha-url {
+  font-size: 0.8em;
+  line-height: 1.4;
+  /* --text-accent e --link-color sao cinza neste tema (212,212,212), nao dava
+     pra distinguir de texto normal; --link-external-color e o azul */
+  color: var(--link-external-color);
+  word-break: break-all;
+  cursor: pointer;
+}
+.cg-ficha-url:hover {
+  text-decoration: underline;
+}
+
+/* Play sobre a capa. Sempre visivel (nao so no hover): num masonry de 900 reels
+   ele e o que diferencia "isso toca aqui dentro" de "isso e so uma imagem". */
+.cg-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.45);
+  /* o backdrop segura o contraste do icone em capa clara ou escura, sem
+     escurecer a imagem inteira com um overlay */
+  backdrop-filter: blur(2px);
+  border: 1.5px solid rgba(255, 255, 255, 0.85);
+  color: #fff;
+  opacity: 0.92;
+  transition: transform 120ms ease, opacity 120ms ease, background 120ms ease;
+}
+
+.cg-play .cg-logo {
+  width: 22px;
+  height: 22px;
+  margin-left: 2px; /* o triangulo tem o peso visual a esquerda; isso recentra */
+}
+
+.cg-play:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.62);
+  transform: translate(-50%, -50%) scale(1.08);
+}
+
+.cg-play:active {
+  transform: translate(-50%, -50%) scale(0.96);
+}
+
+/* no modo lista a miniatura e bem menor: um play de 52px cobriria a capa toda */
+.cg-linha-capa .cg-play {
+  width: 34px;
+  height: 34px;
+}
+
+.cg-linha-capa .cg-play .cg-logo {
+  width: 15px;
+  height: 15px;
+}
+
+/* capa quebrada nao tem o que tocar */
+.cg-quebrada .cg-play {
+  display: none;
+}
+
+/* copiar link: mesmo contorno da lixeira, mas neutro — nao e destrutivo */
+.cg-copiar svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* verde so no instante da confirmacao, depois volta ao normal */
+.cg-copiar.cg-copiado {
+  color: #4ade80;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+/* × de apagar busca: so no hover, senao 8 buscas viram 8 X pedindo clique */
+.cg-apagar-busca {
+  display: none;
+  margin-left: 4px;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.cg-item:hover .cg-apagar-busca {
+  display: flex;
+}
+.cg-apagar-busca:hover {
+  opacity: 1;
+  color: var(--text-error);
+}

@@ -1,0 +1,11 @@
+# configuracao local: guarda a chave da API e o estado da UI
+data.json
+node_modules/
+.DS_Store
+
+# Generated release artifacts and test caches (never publish local runtime data).
+release/
+__pycache__/
+*.pyc
+.coverage
+.pytest_cache/
