@@ -1,0 +1,14 @@
+{
+  "name": "corebrain-agent-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Corebrain-owned isolated agent runtime; build-time dependencies, never global Pi discovery.",
+  "license": "MIT",
+  "engines": { "node": ">=22.19.0" },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "pi-hermes-memory": "0.9.9",
+    "context-mode": "1.0.169"
+  }
+}
