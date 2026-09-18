@@ -819,7 +819,7 @@ class GaleriaView extends ItemView {
   render(preservar) {
     const c = this.contentEl;
     // Data can change while typing: leave the toolbar/input connected.
-    if (preservar && termosDaBusca(this.busca).length && c.querySelector(".cg-painel")) {
+    if (preservar && c.querySelector(".cg-painel")) {
       this.atualizarResultados(true);
       this.sincronizarMetadata();
       const side = c.querySelector(".cg-side");

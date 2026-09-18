@@ -98,3 +98,9 @@ test('resizing masonry keeps chronological result order rather than column-major
  const applied=[];view.colunaMaisCurta=()=>({appendChild:el=>applied.push(el.getAttribute('data-cg-path'))});
  view.montarColunas();assert.deepEqual(applied,['a','b','c']);
 });
+test('clearing a query does not lose input on the next background metadata refresh',()=>{
+ const {view}=setup([]);view.busca='';let updates=0;
+ view.contentEl.querySelector=s=>s==='.cg-painel'?new FakeElement():null;
+ view.contentEl.empty=()=>{throw Error('empty search input destroyed')};
+ view.atualizarResultados=()=>updates++;view.render(true);assert.equal(updates,1);
+});
