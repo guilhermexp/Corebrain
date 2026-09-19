@@ -67,3 +67,11 @@ upstream attribution remain in the root and extension `LICENSE` files. The
 extension is derived from [obsidianmd/obsidian-clipper](https://github.com/obsidianmd/obsidian-clipper). The
 extension contains third-party libraries with their own notices; no upstream
 Obsidian trademark or store listing is implied by this repository.
+
+### Abertura dos clippings
+
+Em **Configurações → Corebrain → Ao clicar em um clipping**, escolha:
+- **Overlay — ficha grande** (padrão): mostra a capa, descrição e ações.
+- **Tela dividida — abrir original ao lado**: abre sites e vídeos no Web Viewer ao lado da galeria e reutiliza o painel. Sem uma URL HTTP(S) válida, abre a nota. Se o Web Viewer estiver indisponível, avisa e abre a nota.
+
+Cmd/Ctrl + clique continua abrindo a nota em uma aba. O botão Play é um atalho explícito para assistir ao lado, independentemente da preferência.

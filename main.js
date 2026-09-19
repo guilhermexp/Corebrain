@@ -20,6 +20,7 @@ const PADRAO = {
   linha: 210,
   ordem: "recente",
   modo: "grade",
+  abrirClipping: "overlay",
   propsColapsadas: true,
   colecoes: ["whatsapp", "videos", "marketing", "audio-voz", "agents", "ui-ux", "macos", "skill", "hack", "tdah", "templates"],
   // Buscas salvas: { nome: { pedido, criada, caminhos: [] } }. Sao listas
@@ -1129,8 +1130,7 @@ class GaleriaView extends ItemView {
     range.addEventListener("change", () => this.plugin.salvar({ [conf.chave]: +range.value }));
   }
 
-  /** Clique simples abre a ficha (overlay); Cmd/Ctrl-clique vai direto pra nota,
-   *  que era o comportamento antigo — quem quer editar nao quer o overlay no meio. */
+  /** O clique respeita a preferencia; Cmd/Ctrl-clique continua indo para a nota. */
   abrirAoClicar(el, file, fm) {
     el.addEventListener("click", (e) => {
       if (e.target.closest(".cg-seta, .cg-acao, .cg-play")) return; // navegam/favoritam/apagam/tocam, nao abrem
@@ -1138,8 +1138,18 @@ class GaleriaView extends ItemView {
         this.app.workspace.getLeaf("tab").openFile(file);
         return;
       }
-      new FichaModal(this, file, fm).open();
+      void this.abrirClipping(file, fm).catch(() => {
+        new Notice("Não foi possível abrir o clipping.");
+      });
     });
+  }
+
+  async abrirClipping(file, fm) {
+    if (this.plugin.cfg.abrirClipping !== "split") {
+      new FichaModal(this, file, fm).open();
+      return;
+    }
+    await abrirNoWebViewer(this.app, normalizarSource(fm?.source), file, this.leaf);
   }
 
   /** Acoes do overlay: aparecem no hover. Ficam no card (nao na moldura)
@@ -1213,7 +1223,9 @@ class GaleriaView extends ItemView {
     bt.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      abrirNoWebViewer(this.app, normalizarSource(fm.source));
+      void abrirNoWebViewer(this.app, normalizarSource(fm.source), undefined, this.leaf).catch(() => {
+        new Notice("Não foi possível abrir o vídeo ao lado.");
+      });
     });
   }
 
@@ -1486,6 +1498,8 @@ function abrirNoNavegador(url) {
  */
 const PREPARA = (modal, som) => `(() => {
   const r = { modal: false, som: false };
+  const host = location.hostname.toLowerCase();
+  if (host !== "instagram.com" && !host.endsWith(".instagram.com")) return r;
   if (${modal}) {
     const d = document.querySelector('[role="dialog"]');
     if (d) {
@@ -1502,7 +1516,11 @@ const PREPARA = (modal, som) => `(() => {
   return r;
 })()`;
 
-async function prepararInstagram(leaf) {
+function ehInstagram(url) {
+  try { return /(^|\.)instagram\.com$/i.test(new URL(url).hostname); } catch { return false; }
+}
+
+async function prepararInstagram(leaf, atual = () => true) {
   // cada coisa e feita uma vez so: religar o som a cada ping brigaria com voce
   // se resolvesse mutar o video na mao
   let modal = false;
@@ -1511,7 +1529,7 @@ async function prepararInstagram(leaf) {
     await new Promise((r) => setTimeout(r, 800));
     const wv = leaf.view && leaf.view.webview;
     // aba trocada de pagina ou fechada no meio: nao ha mais o que preparar
-    if (!wv || !leaf.view.url || !/instagram\.com/i.test(leaf.view.url)) return;
+    if (!atual() || !wv || !ehInstagram(leaf.view.url)) return;
     try {
       const r = await wv.executeJavaScript(PREPARA(!modal, !som));
       modal = modal || r.modal;
@@ -1522,21 +1540,58 @@ async function prepararInstagram(leaf) {
   }
 }
 
-let painelVideo = null;
+// Uma referencia por workspace, compartilhada pelo clique e pelo Play.
+const paineisClipping = new WeakMap();
 
-function abrirNoWebViewer(app, url) {
-  // "ainda esta na janela?" e nao "ja e um webviewer?": setViewState leva um
-  // tick pra trocar o tipo da view, e nesse intervalo getLeavesOfType nao acha o
-  // painel recem-criado — dois plays seguidos abririam dois paineis.
+async function abrirNoWebViewer(app, url, file, origem) {
+  let destino = "";
+  try {
+    const parsed = new URL(url);
+    if (["http:", "https:"].includes(parsed.protocol)) destino = parsed.href;
+  } catch { /* Sem fonte navegavel: abrir a nota, nunca executar outros esquemas. */ }
+  if (!destino && !file) throw new Error("Fonte não navegável");
+
+  let painel = paineisClipping.get(app);
   let vivo = false;
-  if (painelVideo) app.workspace.iterateAllLeaves((l) => { if (l === painelVideo) vivo = true; });
-  const leaf = vivo ? painelVideo : app.workspace.getLeaf("split", "vertical");
-  painelVideo = leaf;
-  // navigate: true e o que faz um webview ja aberto trocar de pagina; sem ele o
-  // setViewState guarda a url e a aba fica onde estava.
-  leaf.setViewState({ type: "webviewer", state: { url, navigate: true }, active: true });
-  app.workspace.revealLeaf(leaf);
-  if (/instagram\.com/i.test(url)) prepararInstagram(leaf);
+  if (painel) app.workspace.iterateAllLeaves((leaf) => { if (leaf === painel.leaf) vivo = true; });
+  if (!vivo) {
+    const leaf = origem && typeof app.workspace.createLeafBySplit === "function"
+      ? app.workspace.createLeafBySplit(origem, "vertical", false)
+      : app.workspace.getLeaf("split", "vertical");
+    painel = { leaf, pendente: Promise.resolve(), geracao: 0 };
+    paineisClipping.set(app, painel); // Reserva antes do primeiro await.
+  }
+  const { leaf } = painel;
+  const geracao = ++painel.geracao;
+  const conectado = () => {
+    let encontrado = false;
+    app.workspace.iterateAllLeaves((l) => { if (l === leaf) encontrado = true; });
+    return encontrado;
+  };
+  // Serializar navegacoes evita que um clique antigo termine depois do mais novo.
+  const trabalho = painel.pendente.catch(() => {}).then(async () => {
+    if (!conectado()) return;
+    if (destino) {
+      try {
+        if (app.internalPlugins?.plugins?.webviewer?.enabled === false) throw new Error("Web viewer desativado");
+        await leaf.setViewState({ type: "webviewer", state: { url: destino, navigate: true }, active: true });
+      } catch (error) {
+        if (!conectado()) return;
+        if (!file) throw error;
+        new Notice("Não foi possível abrir o site. Abrindo a nota ao lado.");
+        await leaf.openFile(file);
+      }
+    } else {
+      await leaf.openFile(file);
+    }
+    if (!conectado()) return;
+    await app.workspace.revealLeaf(leaf);
+    if (destino && ehInstagram(destino)) {
+      void prepararInstagram(leaf, () => painel.geracao === geracao && conectado());
+    }
+  });
+  painel.pendente = trabalho;
+  return trabalho;
 }
 
 /**
@@ -2254,6 +2309,15 @@ class AbaConfig extends PluginSettingTab {
           .setValue(String(this.plugin.cfg[chave] ?? ""))
           .onChange(async (v) => this.plugin.salvar({ [chave]: v.trim() })),
       );
+
+    new Setting(c)
+      .setName("Ao clicar em um clipping")
+      .setDesc("Tela dividida abre sites e vídeos ao lado da galeria; sem link válido, abre a nota. Overlay mostra a ficha grande. O botão Play continua abrindo ao lado.")
+      .addDropdown((d) => d
+        .addOption("overlay", "Overlay — ficha grande")
+        .addOption("split", "Tela dividida — abrir original ao lado")
+        .setValue(this.plugin.cfg.abrirClipping === "split" ? "split" : "overlay")
+        .onChange(async (v) => this.plugin.salvar({ abrirClipping: v === "split" ? "split" : "overlay" })));
 
     new Setting(c).setName("Pastas").setHeading();
 

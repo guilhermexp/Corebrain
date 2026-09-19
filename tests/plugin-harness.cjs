@@ -414,7 +414,7 @@ function loadMain({ requestUrl = async () => ({ text: "", json: {}, status: 200 
     Math,
     Date,
   };
-  const instrumented = `${source}\nmodule.exports = {\n  ClippingsGallery: module.exports,\n  GaleriaView,\n  Classificador,\n  Tradutor,\n  Receptor,\n  capaComRetentativa,\n  PADRAO,\n};`;
+  const instrumented = `${source}\nmodule.exports = {\n  ClippingsGallery: module.exports,\n  GaleriaView,\n  FichaModal,\n  prepararInstagram,\n  Classificador,\n  Tradutor,\n  Receptor,\n  capaComRetentativa,\n  PADRAO,\n};`;
   vm.runInNewContext(instrumented, sandbox, { filename: "main.js" });
   return { internals: sandbox.module.exports, notices: FakeNotice.all, FakeElement, FakeImage, FakeClock };
 }
