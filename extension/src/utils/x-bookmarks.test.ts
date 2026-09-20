@@ -292,4 +292,106 @@ describe('authenticated Corebrain bridge', () => {
 		vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 413, text: async () => '' }));
 		await expect(clipPelaPonte('body', 'note', 'Clippings')).rejects.toThrow(/413/);
 	});
+
+	test('normalizes bridge filenames without changing the note content', async () => {
+		vi.spyOn(browser.storage.local, 'get').mockResolvedValue({
+			corebrain_bridge_port: 27125,
+			corebrain_bridge_token: 'valid',
+		} as any);
+		const conteudo = '---\ntitle: "A / title"\n---\n\nThe note body stays byte-for-byte intact.';
+		const nome = ' . GitHub: Corebrain bridge rejects long clipping titles / preserve note content while creating safe Obsidian filenames [regression]  . GitHub: Corebrain bridge rejects long clipping titles / preserve note content while creating safe Obsidian filenames [regression]  . GitHub: Corebrain bridg^';
+		expect(nome.length).toBe(293);
+		const fetcher = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200,
+			json: async () => ({ ok: true, caminho: 'Clippings/note.md', duplicata: false }),
+		});
+		vi.stubGlobal('fetch', fetcher);
+
+		await clipPelaPonte(conteudo, nome, 'Clippings');
+
+		const payload = JSON.parse(fetcher.mock.calls[0][1].body as string);
+		expect(payload.conteudo).toBe(conteudo);
+		expect(payload.nome).not.toBe(nome);
+		expect(payload.nome).toMatch(/^[^.].{0,179}$/);
+		expect(payload.nome).not.toMatch(/[\\/:*?"<>|#\[\]\^\0\r\n]/);
+	});
+
+	test('keeps unicode filenames within the bridge UTF-16 and UTF-8 limits', async () => {
+		vi.spyOn(browser.storage.local, 'get').mockResolvedValue({
+			corebrain_bridge_port: 27125,
+			corebrain_bridge_token: 'valid',
+		} as any);
+		const nome = '😀'.repeat(120) + ' — GitHub title';
+		const fetcher = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200,
+			json: async () => ({ ok: true, caminho: 'Clippings/note.md', duplicata: false }),
+		});
+		vi.stubGlobal('fetch', fetcher);
+
+		await clipPelaPonte('unchanged content', nome, 'Clippings');
+
+		const payload = JSON.parse(fetcher.mock.calls[0][1].body as string);
+		const encoded = new TextEncoder().encode(payload.nome);
+		expect(payload.nome.length).toBeLessThanOrEqual(180);
+		expect(encoded.length).toBeLessThanOrEqual(180);
+		expect(payload.nome).not.toMatch(/[\\/:*?"<>|#\[\]\^\0\r\n]/);
+		expect([...payload.nome].every((char) => {
+			const codePoint = char.codePointAt(0)!;
+			return codePoint < 0xd800 || codePoint > 0xdfff;
+		})).toBe(true);
+	});
+
+	test('does not leave a surrogate for the plugin 120-unit filename slice', async () => {
+		vi.spyOn(browser.storage.local, 'get').mockResolvedValue({
+			corebrain_bridge_port: 27125,
+			corebrain_bridge_token: 'valid',
+		} as any);
+		const fetcher = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200,
+			json: async () => ({ ok: true, caminho: 'Clippings/note.md', duplicata: false }),
+		});
+		vi.stubGlobal('fetch', fetcher);
+
+		await clipPelaPonte('unchanged content', 'a'.repeat(119) + '😀', 'Clippings');
+
+		const payload = JSON.parse(fetcher.mock.calls[0][1].body as string);
+		expect(payload.nome).toBe('a'.repeat(119));
+		expect(payload.nome.slice(0, 120)).toBe(payload.nome);
+	});
+
+	test.each([
+		['. .hidden', 'hidden'],
+		['^', 'Untitled'],
+		['\ud800.hidden', 'hidden'],
+		['a'.repeat(293), 'a'.repeat(120)],
+	])('normalizes edge-case title %s', async (name, expected) => {
+		const fetcher = vi.fn().mockResolvedValue({
+			ok: true, status: 200,
+			json: async () => ({ ok: true, caminho: 'Clippings/note.md', duplicata: false }),
+		});
+		vi.stubGlobal('fetch', fetcher);
+		await clipPelaPonte('body', name, 'Clippings');
+		expect(JSON.parse(fetcher.mock.calls[0][1].body as string).nome).toBe(expected);
+	});
+
+	test('uses a deterministic fallback when filename normalization is empty', async () => {
+		vi.spyOn(browser.storage.local, 'get').mockResolvedValue({
+			corebrain_bridge_port: 27125,
+			corebrain_bridge_token: 'valid',
+		} as any);
+		const fetcher = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200,
+			json: async () => ({ ok: true, caminho: 'Clippings/Untitled.md', duplicata: false }),
+		});
+		vi.stubGlobal('fetch', fetcher);
+
+		await clipPelaPonte('unchanged content', '///:*?"<>|#[]', 'Clippings');
+
+		const payload = JSON.parse(fetcher.mock.calls[0][1].body as string);
+		expect(payload.nome).toBe('Untitled');
+	});
 });

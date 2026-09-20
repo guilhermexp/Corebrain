@@ -71,6 +71,16 @@ logs or bug reports. The default clipping folder is `Clippings`; change it in
 the plugin settings if required. If Obsidian is unavailable, use the
 extension's direct capture path instead of expecting the bridge to work.
 
+### Capture troubleshooting
+
+- **401 / authentication failed:** fill in the existing installation token in
+  the extension settings and test the connection. A successful connection check
+  validates pairing; it does not prove that a clipping has been saved.
+- **400 / invalid name on older extension builds:** update and reload the
+  unpacked extension. The clip bridge now normalizes page titles into safe,
+  bounded filenames before sending them. The note content and frontmatter title
+  are preserved; server-side path and authentication checks remain enabled.
+
 For inline playback, enable Obsidian's built-in **Web Viewer** core plugin.
 
 ## External accounts and keys

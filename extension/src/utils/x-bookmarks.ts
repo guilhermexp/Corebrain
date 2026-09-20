@@ -37,6 +37,51 @@ export interface ResultadoSync {
 
 export const DEFAULT_X_BOOKMARK_FOLDER = 'Clippings';
 
+// `main.js` applies a 120-unit filename cap after bridge validation. Keep the
+// bridge payload at that same cap so its code-point-safe truncation cannot be
+// split by the plugin's final slice.
+const MAX_BRIDGE_NAME_UNITS = 120;
+const MAX_BRIDGE_NAME_BYTES = 180;
+const BRIDGE_NAME_FALLBACK = 'Untitled';
+
+/**
+ * The plugin validates bridge names before applying its own filename cleanup.
+ * Keep this boundary independent of the browser's platform so a request made
+ * on macOS is accepted by the same bridge running on any other platform.
+ */
+function normalizarNomeDaPonte(nome: string): string {
+	const limpo = String(nome || '')
+		.replace(/[\\/:*?"<>|#\[\]\^\u0000-\u001f\u007f]/g, '')
+		.replace(/\s+/g, ' ')
+		.trim()
+		.replace(/^[.\s]+/, '')
+		.trim();
+
+	let resultado = '';
+	let unidades = 0;
+	let bytes = 0;
+	const encoder = new TextEncoder();
+	for (const caractere of limpo) {
+		const codePoint = caractere.codePointAt(0)!;
+		// A string received from a page can contain an unpaired surrogate. Do not
+		// send one: TextEncoder would replace it and truncation could split a pair.
+		if (codePoint >= 0xd800 && codePoint <= 0xdfff) continue;
+		const unidadesCaractere = caractere.length;
+		const bytesCaractere = encoder.encode(caractere).length;
+		if (
+			unidades + unidadesCaractere > MAX_BRIDGE_NAME_UNITS ||
+			bytes + bytesCaractere > MAX_BRIDGE_NAME_BYTES
+		) {
+			break;
+		}
+		resultado += caractere;
+		unidades += unidadesCaractere;
+		bytes += bytesCaractere;
+	}
+
+	return resultado.replace(/^[.\s]+/, '').trim() || BRIDGE_NAME_FALLBACK;
+}
+
 /** A failed item must remain eligible for the next incremental sync. */
 export function podeAvancarMarcador(
 	total: number,
@@ -375,7 +420,7 @@ export async function clipPelaPonte(
 		const r = await fetchBridge('/clip', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ conteudo, nome, pasta }),
+			body: JSON.stringify({ conteudo, nome: normalizarNomeDaPonte(nome), pasta }),
 		});
 		const erroAuth = authError(r);
 		if (erroAuth) throw erroAuth;
