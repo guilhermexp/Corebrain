@@ -3,7 +3,7 @@
 // storage-utils, browser globals). All browser-dependent behavior is injected
 // via parameters.
 
-import { sanitizeFileName, getDomain, escapeDoubleQuotes } from './string-utils';
+import { sanitizeFileName, getDomain } from './string-utils';
 import { Property } from '../types/types';
 import dayjs from 'dayjs';
 
@@ -139,6 +139,17 @@ export function addSchemaOrgDataToVariables(schemaData: any, variables: Record<s
 // ---------------------------------------------------------------------------
 
 /**
+ * Serialize a string as a YAML double-quoted scalar.
+ *
+ * JSON string escaping is a compatible subset of YAML's double-quoted
+ * escapes, and importantly keeps newlines, CRLFs, and backslashes on the
+ * same physical frontmatter line.
+ */
+function serializeYamlDoubleQuoted(value: string): string {
+	return JSON.stringify(value);
+}
+
+/**
  * Generate YAML frontmatter from compiled properties.
  * Property types are passed in as a map rather than read from browser storage.
  */
@@ -177,7 +188,7 @@ export function generateFrontmatter(
 				if (items.length > 0) {
 					frontmatter += '\n';
 					items.forEach(item => {
-						frontmatter += `  - "${escapeDoubleQuotes(item)}"\n`;
+						frontmatter += `  - ${serializeYamlDoubleQuoted(item)}\n`;
 					});
 				} else {
 					frontmatter += '\n';
@@ -199,7 +210,7 @@ export function generateFrontmatter(
 				frontmatter += property.value.trim() !== '' ? ` ${property.value}\n` : '\n';
 				break;
 			default:
-				frontmatter += property.value.trim() !== '' ? ` "${escapeDoubleQuotes(property.value)}"\n` : '\n';
+				frontmatter += property.value.trim() !== '' ? ` ${serializeYamlDoubleQuoted(property.value)}\n` : '\n';
 		}
 	}
 	frontmatter += '---\n';

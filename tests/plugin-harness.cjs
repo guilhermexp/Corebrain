@@ -370,7 +370,7 @@ function makeApp(files = []) {
   return { app, files: allFiles, metadataChanged, vaultEvents, stored, binary };
 }
 
-function loadMain({ requestUrl = async () => ({ text: "", json: {}, status: 200 }), clock } = {}) {
+function loadMain({ requestUrl = async () => ({ text: "", json: {}, status: 200 }), clock, DateImpl = Date } = {}) {
   FakeNotice.all = [];
   const source = fs.readFileSync(`${__dirname}/../main.js`, "utf8");
   const obsidian = {
@@ -412,7 +412,7 @@ function loadMain({ requestUrl = async () => ({ text: "", json: {}, status: 200 
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout,
     Math,
-    Date,
+    Date: DateImpl,
   };
   const instrumented = `${source}\nmodule.exports = {\n  ClippingsGallery: module.exports,\n  GaleriaView,\n  FichaModal,\n  prepararInstagram,\n  Classificador,\n  Tradutor,\n  Receptor,\n  capaComRetentativa,\n  PADRAO,\n};`;
   vm.runInNewContext(instrumented, sandbox, { filename: "main.js" });

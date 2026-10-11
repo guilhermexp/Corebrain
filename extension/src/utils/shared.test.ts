@@ -379,6 +379,29 @@ describe('generateFrontmatter', () => {
 		]);
 		expect(result).toContain('quote: "she said \\"hello\\""');
 	});
+
+	test('serializes newlines, CRLF, backslashes, and quotes in text values', () => {
+		const value = 'first line\nsecond line\r\nC:\\tmp\\file says "hi"';
+		const result = generateFrontmatter([
+			{ name: 'description', value },
+		]);
+
+		expect(result).toBe(`---\ndescription: ${JSON.stringify(value)}\n---\n`);
+	});
+
+	test('serializes multiline multitext items as valid double-quoted scalars', () => {
+		const items = [
+			'first line\nsecond line',
+			'C:\\tmp\\file says "hi"\r\nnext line',
+		];
+		const result = generateFrontmatter(
+			[{ name: 'tags', value: JSON.stringify(items) }],
+			{ tags: 'multitext' }
+		);
+
+		const expectedItems = items.map(item => `  - ${JSON.stringify(item)}\n`).join('');
+		expect(result).toBe(`---\ntags:\n${expectedItems}---\n`);
+	});
 });
 
 // ---------------------------------------------------------------------------

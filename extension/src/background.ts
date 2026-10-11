@@ -1,3 +1,5 @@
+import { createPanelWindowController } from './utils/panel-window';
+import { launchFloatingPanel } from './utils/floating-launcher';
 import browser from 'webextension-polyfill';
 import { detectBrowser } from './utils/browser-detection';
 import { updateCurrentActiveTab, isValidUrl, isBlankPage, isNormalPageUrl } from './utils/active-tab-manager';
@@ -6,6 +8,9 @@ import { debounce } from './utils/debounce';
 import { Settings } from './types/types';
 import { debugLog } from './utils/debug';
 import { estaLogadoNoX, buscarBookmarks, observarQueryId, salvarComoNotas, pluginDisponivel, enviarPelaPonte, DEFAULT_X_BOOKMARK_FOLDER, podeAvancarMarcador } from './utils/x-bookmarks';
+import { buscarSalvosInstagram, enviarSalvosInstagram, DEFAULT_INSTAGRAM_SAVED_FOLDER } from './utils/instagram-saved';
+import { createInstagramSyncController, INSTAGRAM_SYNC_STORAGE_KEY } from './utils/instagram-sync';
+import { startInstagramSyncPinned } from './utils/instagram-sync-start';
 import { incrementStat, loadSettings } from './utils/storage-utils';
 import { precisaFallbackWebRequest } from './utils/webrequest-guard';
 
@@ -115,6 +120,24 @@ if (typeof browser !== 'undefined' && precisaFallbackWebRequest({
 }
 
 let xSyncCancelado = false;
+
+const instagramSync = createInstagramSyncController({
+	bridgeAvailable: pluginDisponivel,
+	fetchSaved: (onProgress, shouldCancel, sourceTabId) => buscarSalvosInstagram(onProgress, shouldCancel, sourceTabId),
+	sendSaved: (posts, folder, onProgress, shouldCancel) => enviarSalvosInstagram(posts, folder, onProgress, shouldCancel),
+	getFolder: async () => DEFAULT_INSTAGRAM_SAVED_FOLDER,
+	loadStatus: async () => {
+		const result = await browser.storage.local.get(INSTAGRAM_SYNC_STORAGE_KEY);
+		return result[INSTAGRAM_SYNC_STORAGE_KEY];
+	},
+	saveStatus: async (status) => {
+		await browser.storage.local.set({ [INSTAGRAM_SYNC_STORAGE_KEY]: status });
+	},
+	onStatus: (status) => {
+		void browser.runtime.sendMessage({ action: 'instagram-saved-progress', status }).catch(() => {});
+	},
+});
+
 // Aba dedicada do sync em lote. Sem isso, cada nota navegaria a aba ATIVA do
 // usuario para obsidian:// — o que sequestra a pagina que ele esta vendo e
 // dispara o CSP do site (foi o erro visto no x.com).
@@ -393,6 +416,35 @@ browser.runtime.onMessage.addListener((request: unknown, sender: browser.Runtime
 		}
 
 		// fetchProxy is handled by a separate listener below
+
+		if (typedRequest.action === 'instagram-saved-status') {
+			instagramSync.getStatus()
+				.then((status) => sendResponse(status))
+				.catch((error) => sendResponse({ success: false, error: (error as Error).message }));
+			return true;
+		}
+
+		if (typedRequest.action === 'instagram-saved-cancel') {
+			instagramSync.cancel()
+				.then((status) => sendResponse({ ok: true, status }))
+				.catch((error) => sendResponse({ ok: false, error: (error as Error).message }));
+			return true;
+		}
+
+		if (typedRequest.action === 'instagram-saved-sync') {
+			startInstagramSyncPinned(
+				typedRequest.tabId,
+				sender.tab?.id,
+				async () => {
+					const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+					return tabs.find((tab) => tab.id !== undefined)?.id;
+				},
+				(sourceTabId) => instagramSync.start(sourceTabId),
+			)
+				.then((result) => sendResponse(result))
+				.catch((error) => sendResponse({ success: false, error: (error as Error).message }));
+			return true;
+		}
 
 		// --- sync dos bookmarks do X ---
 		// Roda aqui, no service worker, e nao no popup: o popup fecha assim que
@@ -887,9 +939,10 @@ browser.commands.onCommand.addListener(async (command, tab) => {
 
 	if (command === 'quick_clip') {
 		if (tab?.id) {
-			openPopup();
+			await openPopup(true);
+			const targetTabId = tab.id;
 			setTimeout(() => {
-				browser.runtime.sendMessage({action: "triggerQuickClip"})
+				browser.runtime.sendMessage({action: "triggerQuickClip", tabId: targetTabId})
 					.catch(error => console.error("Failed to send quick clip message:", error));
 			}, 500);
 		}
@@ -1178,8 +1231,7 @@ async function injectReaderScript(tabId: number) {
 	}
 }
 
-// When set to 'reader' or 'embedded', clear the popup so action.onClicked fires
-// instead, handling the action directly without briefly opening the popup.
+// Toolbar modes never assign a browser action popup: it has a square native frame.
 const validOpenBehaviors: Settings['openBehavior'][] = ['popup', 'embedded', 'reader'];
 
 function parseOpenBehavior(raw: string | undefined): Settings['openBehavior'] {
@@ -1192,17 +1244,39 @@ async function updateActionPopup(openBehavior?: Settings['openBehavior']): Promi
 		openBehavior = parseOpenBehavior((data.general_settings as Record<string, string>)?.openBehavior);
 	}
 	currentOpenBehavior = openBehavior;
-	if (openBehavior === 'reader' || openBehavior === 'embedded') {
-		await browser.action.setPopup({ popup: '' });
-	} else {
-		await browser.action.setPopup({ popup: 'popup.html' });
-	}
+	await browser.action.setPopup({ popup: '' });
+	// Earlier builds assigned per-tab native popups. Global reset alone does
+	// not remove those overrides after a worker restart/reload.
+	const tabs = await browser.tabs.query({});
+	await Promise.all(tabs.filter(tab => tab.id !== undefined).map(tab =>
+		browser.action.setPopup({ tabId: tab.id!, popup: '' }).catch(() => undefined)
+	));
 }
 
 let currentOpenBehavior: Settings['openBehavior'] = 'popup';
 
-// In reader/embedded mode, opens embedded iframe instead of popup.
-async function openPopup(): Promise<void> {
+// Restricted pages get an independent extension window, never a toolbar bubble.
+const independentPanel = createPanelWindowController({
+ windows: browser.windows,
+ tabs: browser.tabs,
+ getURL: (path: string) => browser.runtime.getURL(path),
+});
+
+async function openFloatingForTab(tab: browser.Tabs.Tab | undefined, ensureOpen = false): Promise<void> {
+	await launchFloatingPanel(tab, {
+	 ensureContent: ensureContentScriptLoadedInBackground,
+	 send: (id, message) => browser.tabs.sendMessage(id, message),
+	 openIndependentPanel: (tabId) => independentPanel.open(tabId),
+	}, ensureOpen);
+}
+
+// Reader and explicit sidebar modes retain their existing behavior.
+async function openPopup(ensureOpen = false): Promise<void> {
+	if (currentOpenBehavior === 'popup') {
+	 const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+	 await openFloatingForTab(tabs[0], ensureOpen);
+	 return;
+	}
 	if (currentOpenBehavior === 'reader' || currentOpenBehavior === 'embedded') {
 		const tabs = await browser.tabs.query({ active: true, currentWindow: true });
 		const tab = tabs[0];
@@ -1213,10 +1287,14 @@ async function openPopup(): Promise<void> {
 		}
 		// Fall through to popup if tab is invalid
 	}
-	await browser.action.openPopup();
+	await independentPanel.open();
 }
 
 browser.action.onClicked.addListener(async (tab) => {
+	if (currentOpenBehavior === 'popup') {
+	 await openFloatingForTab(tab);
+	 return;
+	}
 	if (!tab?.id || !tab.url || !isValidUrl(tab.url) || isBlankPage(tab.url)) return;
 
 	if (currentOpenBehavior === 'reader') {
@@ -1238,6 +1316,9 @@ browser.storage.onChanged.addListener((changes, area) => {
 		updateActionPopup(parseOpenBehavior((changes.general_settings.newValue as Record<string, string>)?.openBehavior));
 	}
 });
+
+// Clear legacy per-tab native popup overrides even if unrelated startup fails.
+void updateActionPopup().catch(error => console.error('Failed to clear legacy popup surfaces:', error));
 
 // Initialize the extension
 initialize().catch(error => {

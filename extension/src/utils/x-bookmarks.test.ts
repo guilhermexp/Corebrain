@@ -192,6 +192,20 @@ describe('salvarComoNotas roda no service worker', () => {
 		}
 	});
 
+	test('salva bookmarks do X do mais antigo para o mais recente', async () => {
+		const batch = [
+			{ ...bm, id: '3', url: 'https://x.com/a/status/3' }, // mais recente
+			{ ...bm, id: '2', url: 'https://x.com/a/status/2' },
+			{ ...bm, id: '1', url: 'https://x.com/a/status/1' }, // mais antigo
+		];
+		const fontes: string[] = [];
+		await salvarComoNotas(batch, 'X Bookmarks', 'v', async (uri) => {
+			const content = new URL(uri).searchParams.get('content') || '';
+			fontes.push(content.match(/^source: "([^"]+)"/m)?.[1] || '');
+		}, undefined, 0);
+		expect(fontes).toEqual(batch.map((item) => item.url).reverse());
+	});
+
 	test('a URI leva silent, vault, pasta e conteudo', () => {
 		const u = montarUriObsidian('minha nota', 'corpo', 'X Bookmarks', 'meuvault');
 		expect(u).toContain('silent=true');

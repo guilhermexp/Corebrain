@@ -23,7 +23,7 @@
 		"https://*/*"
 	],
 	"action": {
-		"default_popup": "popup.html"
+		"default_popup": ""
 	},
 	"side_panel": {
 		"default_path": "side-panel.html"
@@ -60,6 +60,7 @@
 				"browser-polyfill.min.js",
 				"style.css",
 				"side-panel.html",
+				"popup.html",
 				"flatten-shadow-dom.js",
 				"highlighter.css"
 			],

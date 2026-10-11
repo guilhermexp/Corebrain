@@ -23,7 +23,7 @@
 		"<all_urls>"
 	],
 	"action": {
-		"default_popup": "popup.html",
+		"default_popup": "",
 		"default_icon": {
 			"16": "icons/icon16.png",
 			"48": "icons/icon48.png",
@@ -50,7 +50,8 @@
 	],
 	"web_accessible_resources": [
 		{
-			"resources": ["reader.css", "reader-script.js", "browser-polyfill.min.js", "style.css", "side-panel.html", "flatten-shadow-dom.js", "highlighter.css"],
+			"resources": ["reader.css", "reader-script.js", "browser-polyfill.min.js", "style.css", "side-panel.html",
+				"popup.html", "flatten-shadow-dom.js", "highlighter.css"],
 			"extension_ids": ["*"],
    			"matches": [ "*://*/*" ]
 		}

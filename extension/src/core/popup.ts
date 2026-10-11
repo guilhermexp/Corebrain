@@ -1,3 +1,6 @@
+import { panelSourceTabId } from '../utils/panel-context';
+import { initCompactPopup } from '../utils/compact-popup';
+import { closeFloatingPanel, initFloatingPanel } from '../utils/floating-panel-client';
 import dayjs from 'dayjs';
 import { Template, Property, PromptVariable } from '../types/types';
 import { incrementStat, addHistoryEntry, getClipHistory } from '../utils/storage-utils';
@@ -24,6 +27,7 @@ import { saveFile } from '../utils/file-utils';
 import { translatePage, getMessage, setupLanguageAndDirection } from '../utils/i18n';
 import { formatPropertyValue } from '../utils/shared';
 import { initXSync } from '../utils/x-sync-ui';
+import { initInstagramSync } from '../utils/instagram-sync-ui';
 import { jaNaGaleria, clipPelaPonte, BridgeAuthenticationError } from '../utils/x-bookmarks';
 
 interface ReaderModeResponse {
@@ -41,6 +45,8 @@ let lastSelectedVault: string | null = null;
 const isSidePanel = window.location.pathname.includes('side-panel.html');
 const urlParams = new URLSearchParams(window.location.search);
 const isIframe = urlParams.get('context') === 'iframe';
+const isIndependentPanel = urlParams.get('surface') === 'window';
+const isFloatingPanel = urlParams.get('surface') === 'floating' && isIframe;
 
 // Memoize compileTemplate with a short expiration and URL-sensitive key
 const memoizedCompileTemplate = memoizeWithExpiration(
@@ -283,6 +289,7 @@ function setupStorageListeners() {
 function setupMessageListeners() {
 	browser.runtime.onMessage.addListener((request: any, sender: browser.Runtime.MessageSender, sendResponse: (response?: any) => void) => {
 		if (request.action === "triggerQuickClip") {
+			if (request.tabId !== currentTabId) return;
 			handleClipObsidian().then(() => {
 				sendResponse({success: true});
 			}).catch((error) => {
@@ -300,7 +307,7 @@ function setupMessageListeners() {
 			}
 		} else if (request.action === "activeTabChanged") {
 			// Only handle active tab changes if we're in side panel mode, not iframe mode
-			if (!isIframe) {
+			if (!isIframe && !isIndependentPanel) {
 				currentTabId = request.tabId;
 				if (request.isRestrictedUrl) {
 					showError('pageCannotBeClipped');
@@ -323,8 +330,23 @@ function setupMessageListeners() {
 }
 
 document.addEventListener('DOMContentLoaded', async function() {
+	initFloatingPanel();
+	if (isIndependentPanel) {
+		document.documentElement.classList.add('is-window');
+		const close = document.createElement('button');
+		close.className = 'compact-icon-button';
+		close.id = 'independent-panel-close';
+		close.setAttribute('aria-label', 'Fechar painel');
+		close.textContent = '×';
+		close.addEventListener('click', () => window.close());
+		document.getElementById('popup-header')?.append(close);
+		document.addEventListener('keydown', (event) => { if (event.key === 'Escape') window.close(); });
+	}
+	initCompactPopup();
 	initXSync();
+	initInstagramSync();
 	loadedSettings = await loadSettings();
+	setupSettingsButton();
 	if (isIframe) {
 		document.documentElement.classList.add('is-embedded');
 	}
@@ -333,8 +355,10 @@ document.addEventListener('DOMContentLoaded', async function() {
 
 	try {
 		// Get the active tab via background script to handle Firefox compatibility
-		const response = await browser.runtime.sendMessage({ action: "getActiveTab" }) as { tabId?: number; error?: string };
-		if (!response || response.error || !response.tabId) {
+		const response = isIndependentPanel
+			? { tabId: panelSourceTabId(window.location.search), error: undefined }
+			: await browser.runtime.sendMessage({ action: "getActiveTab" }) as { tabId?: number; error?: string };
+		if (!response || response.error || response.tabId === undefined) {
 			showError(getMessage('pleaseReload'));
 			return;
 		}
@@ -347,11 +371,11 @@ document.addEventListener('DOMContentLoaded', async function() {
 		const openBehavior: Settings['openBehavior'] = isMobile && loadedSettings.openBehavior !== 'reader' ? 'popup' : loadedSettings.openBehavior;
 
 		// Check if we should open in an iframe, but only if the URL is valid
-		if (isValidUrl(tab.url) && !isBlankPage(tab.url) && openBehavior === 'embedded' && !isIframe && !isSidePanel) {
+		if (isValidUrl(tab.url) && !isBlankPage(tab.url) && openBehavior === 'embedded' && !isIframe && !isIndependentPanel && !isSidePanel) {
 			try {
 				const response = await browser.runtime.sendMessage({ action: "getActiveTabAndToggleIframe" }) as { success?: boolean; error?: string };
 				if (response && response.success) {
-					window.close();
+					closePopupSurface();
 					return; // Exit script after closing the window
 				} else if (response && response.error) {
 					console.error('Error toggling iframe:', response.error);
@@ -364,14 +388,14 @@ document.addEventListener('DOMContentLoaded', async function() {
 		}
 
 		// Check if we should open in reader mode
-		if (isValidUrl(tab.url) && !isBlankPage(tab.url) && openBehavior === 'reader' && !isIframe && !isSidePanel) {
+		if (isValidUrl(tab.url) && !isBlankPage(tab.url) && openBehavior === 'reader' && !isIframe && !isIndependentPanel && !isSidePanel) {
 			try {
 				const response = await browser.runtime.sendMessage({
 					action: "toggleReaderMode",
 					tabId: currentTabId
 				}) as ReaderModeResponse;
 				if (response && response.success) {
-					window.close();
+					closePopupSurface();
 					return;
 				}
 			} catch (error) {
@@ -396,19 +420,6 @@ document.addEventListener('DOMContentLoaded', async function() {
 				});
 			}
 		}
-		const settingsButton = document.getElementById('open-settings');
-		if (settingsButton) {
-			settingsButton.addEventListener('click', async function() {
-				try {
-					await browser.runtime.sendMessage({ action: "openOptionsPage" });
-					setTimeout(() => window.close(), 50);
-				} catch (error) {
-					console.error('Error opening options page:', error);
-				}
-			});
-			initializeIcons(settingsButton);
-		}
-
 		// Initialize the rest of the popup
 		if (currentTabId) {
 			const initialized = await initializeExtension(currentTabId);
@@ -433,8 +444,10 @@ document.addEventListener('DOMContentLoaded', async function() {
 					});
 				}
 
-				// Initial content load
-				await refreshFields(currentTabId);
+				// Initial focus only after content is ready; later refreshes don't steal it.
+				if (await refreshFields(currentTabId)) {
+					document.getElementById('clip-btn')?.focus();
+				}
 			} catch (error) {
 				console.error('Error initializing popup:', error);
 				showError(getMessage('pleaseReload'));
@@ -447,6 +460,26 @@ document.addEventListener('DOMContentLoaded', async function() {
 		showError(getMessage('pleaseReload'));
 	}
 });
+
+function closePopupSurface(): void {
+	if (!closeFloatingPanel()) window.close();
+}
+
+function setupSettingsButton(): void {
+	const settingsButton = document.getElementById('open-settings');
+	if (!settingsButton) return;
+
+	settingsButton.addEventListener('click', async (event) => {
+		event.preventDefault();
+		try {
+			await browser.runtime.sendMessage({ action: 'openOptionsPage' });
+			setTimeout(closePopupSurface, 50);
+		} catch (error) {
+			console.error('Error opening options page:', error);
+		}
+	});
+	initializeIcons(settingsButton);
+}
 
 function setupEventListeners(tabId: number) {
 	const templateDropdown = document.getElementById('template-select') as HTMLSelectElement;
@@ -476,7 +509,7 @@ function setupEventListeners(tabId: number) {
 			embeddedModeButton.addEventListener('click', async function() {
 				try {
 					await browser.runtime.sendMessage({ action: "getActiveTabAndToggleIframe" });
-					setTimeout(() => window.close(), 50);
+					setTimeout(closePopupSurface, 50);
 				} catch (error) {
 					console.error('Error toggling emedded iframe:', error);
 				}
@@ -616,13 +649,6 @@ function setupEventListeners(tabId: number) {
 }
 
 async function initializeUI() {
-	const clipButton = document.getElementById('clip-btn');
-	if (clipButton) {
-		clipButton.focus();
-	} else {
-		console.warn('Clip button not found');
-	}
-
 	const showMoreActionsButton = document.getElementById('show-variables') as HTMLElement;
 	const variablesPanel = document.createElement('div');
 	variablesPanel.className = 'variables-panel';
@@ -649,25 +675,36 @@ async function initializeUI() {
 function showError(messageKey: string): void {
 	const errorMessage = document.querySelector('.error-message') as HTMLElement;
 	const clipper = document.querySelector('.clipper') as HTMLElement;
-
-	if (errorMessage && clipper) {
+	if (errorMessage) {
 		errorMessage.textContent = getMessage(messageKey);
 		errorMessage.style.display = 'flex';
-		clipper.style.display = 'none';
-
 		document.body.classList.add('has-error');
 	}
+	if (isSidePanel && clipper) clipper.style.display = 'none';
+	setCaptureReady(false);
+	const button = document.getElementById('clip-btn');
+	if (button && document.body.classList.contains('compact-popup')) button.textContent = 'Captura indisponível';
 }
 function clearError(): void {
 	const errorMessage = document.querySelector('.error-message') as HTMLElement;
 	const clipper = document.querySelector('.clipper') as HTMLElement;
-
-	if (errorMessage && clipper) {
+	if (errorMessage) {
 		errorMessage.style.display = 'none';
-		clipper.style.display = 'block';
-
 		document.body.classList.remove('has-error');
 	}
+	if (isSidePanel && clipper) clipper.style.display = 'block';
+}
+
+function setCaptureReady(ready: boolean): void {
+	const clipButton = document.getElementById('clip-btn') as HTMLButtonElement | null;
+	const moreButton = document.getElementById('more-btn') as HTMLButtonElement | null;
+	const moreDropdown = document.getElementById('more-dropdown');
+	if (clipButton) clipButton.disabled = !ready;
+	if (moreButton) {
+		moreButton.disabled = !ready;
+		moreButton.setAttribute('aria-expanded', ready && moreDropdown?.classList.contains('show') ? 'true' : 'false');
+	}
+	if (!ready) moreDropdown?.classList.remove('show');
 }
 
 function logError(message: string, error?: any): void {
@@ -695,25 +732,26 @@ async function waitForInterpreter(interpretBtn: HTMLButtonElement): Promise<void
 }
 
 async function refreshFields(tabId: number, { checkTemplateTriggers = true, rebuildSkeleton = true }: { checkTemplateTriggers?: boolean; rebuildSkeleton?: boolean } = {}) {
+	setCaptureReady(false);
 	if (templates.length === 0) {
 		console.warn('No templates available');
 		showError('noTemplates');
-		return;
+		return false;
 	}
 
 	try {
 		const tab = await getTabInfo(tabId);
 		if (!tab.url || isBlankPage(tab.url)) {
 			showError('pageCannotBeClipped');
-			return;
+			return false;
 		}
 		if (!isValidUrl(tab.url)) {
 			showError('onlyHttpSupported');
-			return;
+			return false;
 		}
 		if (isRestrictedUrl(tab.url)) {
 			showError('pageCannotBeClipped');
-			return;
+			return false;
 		}
 
 		// Start content extraction (don't await yet)
@@ -770,20 +808,24 @@ async function refreshFields(tabId: number, { checkTemplateTriggers = true, rebu
 					currentTemplate,
 					initializedContent.currentVariables,
 					extractedData.schemaOrgData
-				);
+					);
 
-				// Update variables panel if it's open
+					// Update variables panel if it's open
 				updateVariablesPanel(currentTemplate, currentVariables);
-			} else {
+				clearError();
+				setCaptureReady(true);
+				} else {
 				throw new Error('Unable to initialize page content.');
 			}
 		} else {
 			throw new Error('Unable to extract page content.');
 		}
+		return true;
 	} catch (error) {
 		console.error('Error refreshing fields:', error);
 		const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
 		showError(errorMessage);
+		return false;
 	}
 }
 
@@ -1208,8 +1250,8 @@ async function toggleHighlighterMode(tabId: number) {
 			updateHighlighterModeUI(isNowActive);
 
 			// Close the popup if highlighter mode is turned on and not in side panel
-			if (isNowActive && !isSidePanel && !isIframe) {
-				setTimeout(() => window.close(), 50);
+			if (isNowActive && !isSidePanel && (!isIframe || isFloatingPanel)) {
+				setTimeout(closePopupSurface, 50);
 			}
 		} else {
 			throw new Error(response.error || "Failed to toggle highlighter mode.");
@@ -1249,8 +1291,8 @@ async function toggleReaderMode(tabId: number) {
 		}
 
 		// Close the popup if not in side panel or iframe
-		if (!isSidePanel && !isIframe) {
-			window.close();
+		if (!isSidePanel && (!isIframe || isFloatingPanel)) {
+			closePopupSurface();
 		}
 	} catch (error) {
 		console.error('Error toggling reader mode:', error);
@@ -1345,6 +1387,9 @@ function determineMainAction() {
 	const addSyncX = () => addSecondaryAction(secondaryActions, 'syncXBookmarks', () => {
 		(document.getElementById('x-sync') as HTMLElement | null)?.click();
 	});
+	const addSyncInstagram = () => addSecondaryAction(secondaryActions, 'syncInstagramSaved', () => {
+		(document.getElementById('instagram-sync') as HTMLElement | null)?.click();
+	}, 'Importar salvos do Instagram');
 
 	// Set up actions based on saved behavior
 	switch (loadedSettings.saveBehavior) {
@@ -1355,6 +1400,7 @@ function determineMainAction() {
 			addSecondaryAction(secondaryActions, 'addToObsidian', () => handleClipObsidian());
 			addSecondaryAction(secondaryActions, 'saveFile', handleSaveToDownloads);
 			addSyncX();
+			addSyncInstagram();
 			break;
 		case 'saveFile':
 			mainButton.textContent = getMessage('saveFile');
@@ -1363,14 +1409,16 @@ function determineMainAction() {
 			addSecondaryAction(secondaryActions, 'addToObsidian', () => handleClipObsidian());
 			addSecondaryAction(secondaryActions, 'copyToClipboard', copyContent);
 			addSyncX();
+			addSyncInstagram();
 			break;
 		default: // 'addToObsidian'
-			mainButton.textContent = getMessage('addToObsidian');
+			mainButton.textContent = isSidePanel ? getMessage('addToObsidian') : 'Salvar página atual';
 			mainButton.onclick = () => handleClipObsidian();
 			// Add direct actions to secondary
 			addSecondaryAction(secondaryActions, 'copyToClipboard', copyContent);
 			addSecondaryAction(secondaryActions, 'saveFile', handleSaveToDownloads);
 			addSyncX();
+			addSyncInstagram();
 	}
 }
 
@@ -1437,7 +1485,7 @@ async function handleClipObsidian(): Promise<void> {
 		await setLocalStorage('lastSelectedVault', lastSelectedVault);
 
 		if (!isSidePanel) {
-			setTimeout(() => window.close(), 500);
+			setTimeout(closePopupSurface, 500);
 		}
 	} catch (error) {
 		console.error('Error in handleClipObsidian:', error);
@@ -1446,7 +1494,7 @@ async function handleClipObsidian(): Promise<void> {
 	}
 }
 
-function addSecondaryAction(container: Element, actionType: string, handler: () => void) {
+function addSecondaryAction(container: Element, actionType: string, handler: () => void, label?: string) {
 	const menuItem = document.createElement('div');
 	menuItem.className = 'menu-item';
 	
@@ -1461,8 +1509,12 @@ function addSecondaryAction(container: Element, actionType: string, handler: () 
 	// Create menu item title
 	const menuItemTitle = document.createElement('div');
 	menuItemTitle.className = 'menu-item-title';
-	menuItemTitle.setAttribute('data-i18n', actionType);
-	menuItemTitle.textContent = getMessage(actionType);
+	if (label) {
+		menuItemTitle.textContent = label;
+	} else {
+		menuItemTitle.setAttribute('data-i18n', actionType);
+		menuItemTitle.textContent = getMessage(actionType);
+	}
 	
 	// Assemble menu item
 	menuItem.appendChild(menuItemIcon);
@@ -1479,6 +1531,7 @@ function getActionIcon(actionType: string): string {
 		case 'saveFile': return 'file-down';
 		case 'addToObsidian': return 'pen-line';
 		case 'syncXBookmarks': return 'bookmark';
+		case 'syncInstagramSaved': return 'import';
 		default: return 'plus';
 	}
 }

@@ -25,7 +25,24 @@ login and external API availability.
 - **Clip creation** from a URL, including title, description, source, image and
   other page metadata. A link can be pasted or dragged into the gallery.
 - **X bookmark import** through the authenticated local bridge. Bookmark
-  metadata is normalized into the same clipping format.
+  metadata is normalized into the same clipping format. Duplicate detection
+  compares the post ID across renamed handles, X/Twitter domains and tracking
+  parameters, without rewriting saved source URLs. Repeating a sync skips
+  posts already in the gallery. Destructive duplicate cleanup requires the
+  complete canonical source sets to match, not just one overlapping link.
+  New bookmarks are persisted oldest-to-newest so the recent gallery order
+  matches the newest-first X batch. Generated arrival stamps increase even
+  within the same millisecond; existing arrivals and publication dates stay
+  unchanged. A failed arrival write reports an import error; the created note
+  is preserved and uses creation-time fallback (retry skips it as existing).
+- **Instagram saved-post import (beta)** from the extension on an active,
+  logged-in Instagram tab. Imports Todos os salvos through the paired plugin,
+  without a cloud service or forwarding session credentials. Reads a complete
+  feed before writing; repeated imports skip existing post shortcodes across
+  post/reel URL aliases. Preserves feed order and existing notes. Includes
+  progress, cancellation, partial-error reporting and optional background local
+  covers for new notes. Browser reload and live-session acceptance are required
+  after building. See [Instagram import](instagram-saved-import.md).
 - **Images and covers**, including local covers, retries for missing images and
   a carousel for additional images in a note. GIF images can be selected as the
   cover when available.

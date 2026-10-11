@@ -449,7 +449,10 @@ export async function salvarComoNotas(
 	let salvos = 0;
 	let erros = 0;
 
-	for (const b of bookmarks) {
+	// X returns newest -> oldest, but Obsidian's recent gallery sort follows
+	// note creation time. Save in reverse so fallback imports keep X's order.
+	for (let i = bookmarks.length - 1; i >= 0; i--) {
+		const b = bookmarks[i];
 		try {
 			const { nome, conteudo } = bookmarkParaNota(b);
 			await abrir(montarUriObsidian(nome, conteudo, pasta, vault));
@@ -458,7 +461,7 @@ export async function salvarComoNotas(
 			erros++;
 			debugLog('XBookmarks', 'falhou ao salvar', b.id, e);
 		}
-		aoProgredir?.(salvos + erros, bookmarks.length);
+		aoProgredir?.(bookmarks.length - i, bookmarks.length);
 		if (pausaMs) await new Promise((r) => setTimeout(r, pausaMs));
 	}
 	return { salvos, erros };

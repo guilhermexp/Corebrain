@@ -1,101 +1,135 @@
 <!DOCTYPE html>
 <html id="popup">
 	<head>
+		<meta charset="UTF-8">
 		<title data-i18n="extensionName">Corebrain Web Clipper</title>
 		<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 		<link rel="stylesheet" href="style.css">
 		<script src="browser-polyfill.min.js"></script>
 	</head>
-	<body id="popup-container">
-		<!-- feedback do sync de bookmarks: fica escondido ate o sync comecar -->
-		<div id="x-sync-status" class="x-sync-status is-hidden">
-			<div class="x-sync-linha">
-				<span id="x-sync-texto">Sincronizando…</span>
-				<a href="#" id="x-sync-cancelar" class="x-sync-cancelar">cancelar</a>
-			</div>
-			<div class="x-sync-barra"><div id="x-sync-progresso"></div></div>
+	<body id="popup-container" class="compact-popup">
+		<header id="popup-header" class="compact-popup-header">
+            <a href="#" id="open-settings" class="compact-icon-button" aria-label="Configurações" title="Configurações"><i data-lucide="settings" aria-hidden="true"></i></a>
+            <button id="capture-controls-toggle" class="compact-icon-button" aria-label="Opções de captura" aria-expanded="false" aria-controls="capture-controls" title="Opções de captura"><i data-lucide="ellipsis" aria-hidden="true"></i></button>
+        </header>
+        <div class="compact-popup-brand" aria-label="Corebrain">
+            <i data-lucide="bookmark" aria-hidden="true"></i>
+            <h1>Guarde o que<br>importa.</h1>
+            <span class="brand-name">Corebrain</span>
+        </div>
+
+        <div id="x-sync-status" class="x-sync-status is-hidden" role="status" aria-live="polite">
+            <details class="sync-details">
+                <summary id="x-sync-summary">X</summary>
+                <span id="x-sync-texto"></span>
+            </details>
+            <a href="#" id="x-sync-cancelar" class="x-sync-cancelar">Cancelar</a>
+            <div class="x-sync-barra"><div id="x-sync-progresso"></div></div>
+        </div>
+        <div id="instagram-sync-status" class="instagram-sync-status is-hidden" role="status" aria-live="polite">
+            <details class="sync-details">
+                <summary id="instagram-sync-summary">Instagram</summary>
+                <span id="instagram-sync-texto"></span>
+            </details>
+            <a href="#" id="instagram-sync-cancelar" class="instagram-sync-cancelar is-hidden">Cancelar</a>
+            <div class="instagram-sync-barra"><div id="instagram-sync-progresso"></div></div>
+        </div>
+
+		<p id="popup-error" class="error-message" role="status" aria-live="polite" style="display: none;"></p>
+
+		<div id="aviso-duplicata" class="aviso-duplicata" role="status" style="display: none;">
+			<i data-lucide="copy" aria-hidden="true"></i>
+			<span class="aviso-duplicata-texto"></span>
 		</div>
 
-		<div id="popup-header">
-			<div id="template-container">
-				<select id="template-select">
-					<option value=""></option>
-				</select>
-			</div>
-			<div class="popup-actions">
-				<a href="#" id="x-sync" class="clickable-icon" title="Sincronizar bookmarks do X">
-					<i data-lucide="bookmark"></i>
-				</a>
-				<a href="#" id="show-variables" class="clickable-icon"
-					data-i18n-title="showPageVariables">
-					<i data-lucide="ellipsis"></i>
-				</a>
-				<a href="#" id="highlighter-mode" class="clickable-icon"
-					data-i18n-title="highlightPage">
-					<i data-lucide="highlighter"></i>
-				</a>
-				<a href="#" id="reader-mode" class="clickable-icon"
-					data-i18n-title="reader">
-					<i data-lucide="book-open"></i>
-				</a>
-				<a href="#" id="embedded-mode" class="clickable-icon" 
-					data-i18n-title="openEmbedded">
-					<i data-lucide="picture-in-picture-2"></i>
-				</a>
-				<a href="#" id="open-settings" class="clickable-icon" 
-					data-i18n-title="settings">
-					<i data-lucide="settings"></i>
-				</a>		
+		<div class="compact-capture-action">
+			<div class="action-buttons" id="action-buttons">
+				<button id="clip-btn" class="mod-cta" disabled>Preparando captura…</button>
+				<div class="menu-btn">
+				<button id="more-btn" aria-label="Mais ações" aria-haspopup="true" aria-expanded="false" disabled>
+						<i data-lucide="chevron-down" aria-hidden="true"></i>
+					</button>
+					<div class="menu" id="more-dropdown">
+						<div class="secondary-actions"></div>
+					</div>
+				</div>
 			</div>
 		</div>
-		<p class="error-message" style="display: none;"></p>
-		<div class="clipper">
-			<div id="aviso-duplicata" class="aviso-duplicata" style="display: none;">
-				<i data-lucide="copy"></i>
-				<span class="aviso-duplicata-texto"></span>
+
+		<nav class="compact-sync-actions" aria-label="Sincronizar clippings">
+			<a href="#" id="instagram-sync" class="compact-sync-action" title="Importar salvos do Instagram">
+				<i data-lucide="instagram" aria-hidden="true"></i>
+				<span>Sincronizar Instagram</span>
+			</a>
+			<a href="#" id="x-sync" class="compact-sync-action" title="Sincronizar bookmarks do X">
+				<i data-lucide="x" aria-hidden="true"></i>
+				<span>Sincronizar X</span>
+			</a>
+		</nav>
+
+		<section id="capture-controls" hidden>
+		<details id="capture-options" class="compact-details">
+			<summary>Opções de captura</summary>
+			<div class="capture-options-content">
+				<label for="template-select">Modelo</label>
+				<select id="template-select"><option value=""></option></select>
+				<div class="vault-path-container">
+					<div id="vault-container" style="display: none;">
+						<label for="vault-select">Cofre</label>
+						<select id="vault-select"></select>
+					</div>
+					<label class="capture-folder" for="path-name-field">
+						<span>Pasta</span>
+						<input id="path-name-field" type="text" data-i18n="folder" aria-label="Pasta">
+					</label>
+				</div>
 			</div>
+		</details>
+
+
+		<details id="more-tools" class="compact-details compact-tools">
+			<summary>Mais ferramentas</summary>
+			<div class="popup-actions">
+				<a href="#" id="show-variables" class="clickable-icon" data-i18n-title="showPageVariables" aria-label="Variáveis da página">
+					<i data-lucide="ellipsis" aria-hidden="true"></i><span>Variáveis da página</span>
+				</a>
+				<a href="#" id="highlighter-mode" class="clickable-icon" data-i18n-title="highlightPage" aria-label="Destacar página">
+					<i data-lucide="highlighter" aria-hidden="true"></i><span>Destacar página</span>
+				</a>
+				<a href="#" id="reader-mode" class="clickable-icon" data-i18n-title="reader" aria-label="Modo de leitura">
+					<i data-lucide="book-open" aria-hidden="true"></i><span>Modo de leitura</span>
+				</a>
+				<a href="#" id="embedded-mode" class="clickable-icon" data-i18n-title="openEmbedded" aria-label="Abrir incorporado">
+					<i data-lucide="picture-in-picture-2" aria-hidden="true"></i><span>Abrir incorporado</span>
+				</a>
+			</div>
+		</details>
+
+		</section>
+		<div id="interpreter" class="compact-interpreter" style="display: none;">
+			<textarea id="prompt-context" rows="3"></textarea>
+			<div class="interpreter-controls">
+				<select id="model-select" style="display: none;"></select>
+				<button id="interpret-btn" data-i18n="interpret"></button>
+				<span id="interpreter-timer" style="display: none;"></span>
+			</div>
+			<div id="token-counter" class="token-counter"></div>
+			<div id="interpreter-error" style="display: none;"></div>
+		</div>
+
+		<!-- O conteúdo extraído continua disponível para a lógica de captura, mas não é mostrado no popup. -->
+		<div id="capture-data" class="clipper capture-data" hidden aria-hidden="true">
 			<textarea id="note-name-field" type="text" data-i18n="noteName" rows="1"></textarea>
 			<div class="metadata-properties-header">
 				<span data-i18n="properties"></span>
 				<i data-lucide="chevron-down"></i>
 			</div>
-			<div class="metadata-properties"></div>
+			<div id="metadata-properties" class="metadata-properties"></div>
 			<div id="note-content-container">
 				<textarea id="note-content-field" rows="4" data-i18n="notesAboutPage"></textarea>
 			</div>
-			<div class="clipper-footer">
-				<div class="vault-path-container">
-					<div id="vault-container" style="display: none;">
-						<select id="vault-select"></select>
-					</div>
-					<input id="path-name-field" type="text" data-i18n="folder"/>
-				</div>
-				<div id="interpreter" style="display: none;">
-					<textarea id="prompt-context" rows="3"></textarea>
-					<div class="interpreter-controls">
-						<select id="model-select" style="display: none;"></select>
-						<button id="interpret-btn" data-i18n="interpret"></button>
-						<span id="interpreter-timer" style="display: none;"></span>
-					</div>
-					<div id="token-counter" class="token-counter"></div>
-					<div id="interpreter-error" style="display: none;"></div>
-				</div>
-				<div class="action-buttons" id="action-buttons">
-					<button id="clip-btn" class="mod-cta"><!-- Text set by determineMainAction --></button>
-					<div class="menu-btn">
-						<button id="more-btn"><i data-lucide="chevron-down"></i></button>
-						<div class="menu" id="more-dropdown">
-							<div class="secondary-actions">
-								<!-- Secondary actions will be populated by ts -->
-							</div>
-						</div>
-					</div>
-					<div class="share-btn">
-						<a class="share-content clickable-icon" data-i18n-title="share"><i data-lucide="share"></i></a>
-					</div>
-				</div>
-			</div>
 		</div>
+
 		<script type="module" src="popup.js"></script>
 	</body>
 </html>

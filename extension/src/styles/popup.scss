@@ -70,7 +70,7 @@
 #popup-container:has(.variables-panel.show) {
 	width: var(--popup-width-expanded);
 	transition: width 0.1s ease-in-out;
-	overflow: hidden;
+	overflow: visible;
 }
 #popup-container {
 	height: 100%;
@@ -417,6 +417,46 @@
 
 #x-sync.esta-sincronizando { opacity: .5; pointer-events: none; }
 
+/* --- feedback da importação de salvos do Instagram --- */
+.instagram-sync-status {
+	padding: 6px 10px 8px;
+	border-bottom: 1px solid var(--divider-color);
+	font-size: var(--font-ui-smaller);
+}
+
+.instagram-sync-linha {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin-bottom: 5px;
+	color: var(--text-muted);
+}
+
+.instagram-sync-status.tem-erro .instagram-sync-linha { color: var(--text-error, #ee0000); }
+
+.instagram-sync-cancelar { color: var(--text-faint); text-decoration: none; }
+.instagram-sync-cancelar:hover { color: var(--text-normal); }
+
+.instagram-sync-barra {
+	height: 3px;
+	border-radius: 2px;
+	overflow: hidden;
+	background: var(--background-modifier-border);
+}
+
+.instagram-sync-barra > div {
+	height: 100%;
+	width: 0;
+	border-radius: 2px;
+	background: var(--interactive-accent);
+	transition: width 180ms ease;
+}
+
+.instagram-sync-barra > div.indeterminado { animation: x-sync-pulso 1.1s ease-in-out infinite; }
+
+#instagram-sync.esta-sincronizando { opacity: .5; pointer-events: none; }
+
 /* --- acabamento Geist no popup (segue o exemplo: cantos suaves, hairline, respiro) --- */
 
 #popup-header {
@@ -507,3 +547,184 @@
 		transform: rotate(360deg);
 	}
 }
+
+/* Reference-style popup. Never change the side-panel surface. */
+#popup:has(.compact-popup):not(.is-side-panel):not(.is-embedded):not(.is-window) {
+ --popup-width: 220px;
+ width: 220px;
+ height: auto;
+ min-height: 0;
+ max-height: 600px;
+ overflow-y: auto;
+ border-radius: 22px;
+ background: transparent;
+ color-scheme: dark;
+}
+#popup #popup-container.compact-popup {
+ box-sizing: border-box;
+ width: 220px;
+ height: auto;
+ min-height: 0;
+ max-height: none;
+ padding: 10px 10px 12px;
+ gap: 8px;
+ background: transparent;
+ position: relative;
+ isolation: isolate;
+ color: #c7c7c7;
+ border: 0;
+ border-radius: 22px;
+ overflow: visible;
+ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+ font-size: 12px;
+ --text-normal: #dedede;
+ --text-muted: #999;
+ --background-primary: #191919;
+ --background-secondary: #222;
+ --background-modifier-border: #353535;
+ --background-modifier-hover: #292929;
+}
+.compact-popup {
+ // Paint a separate rounded surface: body background would fill the canvas.
+ &::before {
+  content: ''; position: absolute; inset: 0; z-index: -1;
+  background: #191919; border-radius: inherit; pointer-events: none;
+ }
+ #popup-header.compact-popup-header {
+  display: flex; justify-content: space-between; width: 100%; padding: 0;
+  border: 0; height: 24px; flex: none;
+ }
+ .compact-icon-button {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; min-height: 0; padding: 2px;
+  border: 0; border-radius: 7px; background: transparent; box-shadow: none; color: #929292;
+  svg { width: 17px; height: 17px; }
+  &:hover { background: #292929; color: #eee; }
+ }
+ .compact-popup-brand {
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  padding: 0 0 12px; margin-top: -8px; pointer-events: none;
+  > svg { width: 23px; height: 27px; fill: #ff4b23; stroke: #ff4b23; margin-bottom: 10px; }
+  h1 { margin: 0; font-size: 17px; line-height: 1.2; font-weight: 550; letter-spacing: -.5px; color: #ededed; }
+  .brand-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+ }
+ .compact-capture-action, #action-buttons { width: 100%; }
+ #action-buttons {
+  display: flex; gap: 0; border-radius: 14px; background: #333;
+  &:has(:focus-visible) { outline: 2px solid #a0a0a0; outline-offset: 2px; }
+ }
+ #clip-btn, #more-btn {
+  min-height: 32px; height: 32px; border: 0; background: #333; color: #ddd;
+  box-shadow: none; font-size: 12px; font-weight: 450; line-height: 1.2;
+  &:hover:not(:disabled) { background: #404040; }
+  &:disabled { color: #888; opacity: 1; cursor: default; }
+ }
+ #clip-btn { border-radius: 14px 0 0 14px; padding: 0 6px 0 10px; justify-content: flex-start; text-align: left; min-width: 0; }
+ #clip-btn::before { content: '+'; font-size: 17px; margin-right: 9px; width: 16px; flex: none; text-align: center; font-weight: 300; }
+ #action-buttons .menu-btn { position: relative; right: auto; align-self: stretch; flex: none; background: transparent; border-radius: 0 14px 14px 0; }
+ #more-btn { width: 26px; padding: 0 6px; border-radius: 0 14px 14px 0;
+  svg { width: 14px; height: 14px; } }
+ .compact-sync-actions { display: flex; flex-direction: column; gap: 2px; padding-top: 0; }
+ .compact-sync-action {
+  display: flex; align-items: center; gap: 9px; min-height: 34px; padding: 0 10px;
+  border: 0; border-radius: 12px; background: transparent; color: #bbb;
+  text-decoration: none; font-size: 13px; font-weight: 400;
+  svg { width: 16px; height: 16px; flex: none; color: #999; }
+  &:active { background: #303030; }
+  &:hover { background: #252525; color: #eee; }
+ }
+ #capture-controls[hidden], .capture-data[hidden] { display: none !important; }
+ #capture-controls { width: 100%; border-top: 1px solid #333; margin-top: 6px; padding-top: 8px; }
+ .compact-details { border: 0; background: transparent; font-size: 12px; }
+ .compact-details > summary { padding: 9px 4px; color: #bbb; cursor: pointer; }
+ .capture-options-content { display: flex; flex-direction: column; gap: 6px; padding: 4px; }
+ .vault-path-container { display: flex; flex-direction: column; gap: 6px; }
+ .capture-folder { display: flex; flex-direction: column; gap: 4px; }
+ select, input { max-width: 100%; width: 100%; box-sizing: border-box; }
+ .compact-tools .popup-actions { display: flex; flex-direction: column; align-items: stretch; position: static; }
+ .compact-tools a { display: flex; gap: 8px; padding: 8px 4px; text-decoration: none; font-size: 12px; }
+ .compact-tools svg { width: 16px; height: 16px; }
+ .x-sync-status, .instagram-sync-status {
+  order: 8; width: 100%; box-sizing: border-box; padding: 7px 9px; border: 0;
+  border-radius: 12px; background: #232323; font-size: 11px; line-height: 1.4;
+ }
+ .sync-details summary { cursor: pointer; color: #aaa; font-size: 11px; }
+ .tem-erro .sync-details summary { color: #e7a290; }
+ .sync-details[open] summary { margin-bottom: 7px; }
+ .sync-details > span { display: block; overflow-wrap: anywhere; color: #b8b8b8; }
+ .x-sync-barra, .instagram-sync-barra { height: 2px; margin-top: 5px; }
+ .tem-erro .x-sync-barra, .tem-erro .instagram-sync-barra { display: none; }
+ .error-message { padding: 7px; min-height: 0; height: auto; font-size: 11px; line-height: 1.4; color: #e7a290; text-align: left; }
+ .aviso-duplicata { font-size: 11px; padding: 7px; border: 0; }
+ :focus-visible { outline: 2px solid #a0a0a0; outline-offset: 2px; }
+ #clip-btn:focus, #clip-btn:focus-visible, #more-btn:focus, #more-btn:focus-visible {
+  outline: none; box-shadow: none;
+ }
+ #clip-btn:focus-visible, #more-btn:focus-visible { background: #404040; }
+ #clip-btn:focus ~ .menu-btn #more-btn { border-inline-start: 0; }
+ #more-dropdown { border-radius: 12px; padding: 4px; }
+ #more-dropdown .menu-item { border-radius: 8px; }
+ .sync-details summary { border-radius: 6px; }
+ #interpreter { font-size: 12px; }
+}
+.compact-popup #clip-btn.clipping { color: transparent; }
+
+/* The floating host owns the viewport/frame; the child sizes to its content. */
+#popup.is-floating.is-embedded:has(.compact-popup) {
+	--popup-width: 100%;
+	--popup-width-expanded: 100%;
+	--popup-height: auto;
+	--popup-max-height: none;
+	--chromium-popup-height: auto;
+	box-sizing: border-box;
+	width: 100%;
+	height: auto;
+	min-height: 0;
+	max-height: none;
+	overflow-x: hidden;
+	overflow-y: auto;
+	border-radius: 22px;
+	background: transparent;
+}
+
+#popup.is-floating #popup-container.compact-popup {
+	box-sizing: border-box;
+	width: 100%;
+	height: auto;
+	min-height: 100px;
+	max-height: none;
+	overflow: visible;
+	border-radius: 22px;
+	background: transparent;
+}
+
+#popup.is-floating #popup-header.compact-popup-header {
+	justify-content: flex-start;
+	gap: 4px;
+}
+
+#popup.is-floating #capture-controls-toggle {
+	margin-left: auto;
+}
+
+#popup.is-floating #floating-panel-close {
+	font-family: inherit;
+	font-size: 21px;
+	font-weight: 300;
+	line-height: 1;
+}
+
+// Independent extension window: one surface, no inner fake rounded card.
+#popup.is-window {
+ width: 100%; height: 100%; min-height: 100%; max-height: none;
+ background: #191919; border-radius: 0; overflow-y: auto;
+}
+#popup.is-window #popup-container.compact-popup {
+ width: 100%; min-height: 100vh; height: auto; max-height: none;
+ background: #191919; border-radius: 0; overflow: visible;
+}
+#popup.is-window .compact-popup::before { display: none; }
+#popup.is-window #popup-header.compact-popup-header { justify-content: flex-start; gap: 4px; }
+#popup.is-window #capture-controls-toggle { margin-left: auto; }
+#popup.is-window #independent-panel-close { font-size: 21px; font-weight: 300; }
+#popup .compact-popup .error-message { flex: none; justify-content: flex-start; }

@@ -12,6 +12,7 @@ import { saveFile } from './utils/file-utils';
 import { debugLog } from './utils/debug';
 import { updateSidebarWidth, addResizeHandle, cleanupResizeHandlers } from './utils/iframe-resize';
 import { parseForClip } from './utils/clip-utils';
+import { toggleFloatingPanel } from './utils/floating-panel';
 
 declare global {
 	interface Window {
@@ -117,6 +118,21 @@ declare global {
 
 		if (request.action === "ping") {
 			sendResponse({});
+			return true;
+		}
+
+		if (request.action === "toggle-floating-panel" || request.action === "open-floating-panel") {
+			try {
+				const parentOrigin = window.location.origin;
+				const parentOriginParam = parentOrigin !== 'null'
+					? `&parentOrigin=${encodeURIComponent(parentOrigin)}`
+					: '';
+				const popupUrl = browser.runtime.getURL(`popup.html?context=iframe&surface=floating${parentOriginParam}`);
+				toggleFloatingPanel(popupUrl, request.action === 'open-floating-panel');
+				sendResponse({ success: true });
+			} catch (error) {
+				sendResponse({ success: false, error: (error as Error).message });
+			}
 			return true;
 		}
 

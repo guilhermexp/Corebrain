@@ -335,6 +335,66 @@ function normalizarSource(s) {
   return String(s === null || s === undefined ? "" : s).trim().replace(/^<|>$/g, "");
 }
 
+/** Chave de comparacao sem alterar a URL original que a nota guarda/abre.
+ *  Posts do X mantem o mesmo ID quando o autor troca de @handle ou de host. */
+const HOSTS_X = new Set([
+  "x.com", "www.x.com", "mobile.x.com",
+  "twitter.com", "www.twitter.com", "mobile.twitter.com",
+]);
+const HOSTS_INSTAGRAM = new Set(["instagram.com", "www.instagram.com", "m.instagram.com"]);
+
+/** Parseia URL de post sem aceitar sufixos/lookalikes como `instagram.com.evil`. */
+function urlInstagram(source) {
+  try {
+    const parsed = new URL(normalizarSource(source));
+    if (/^https?:$/.test(parsed.protocol) && HOSTS_INSTAGRAM.has(parsed.hostname.toLowerCase())) return parsed;
+  } catch { /* Uma fonte nao-URL fica no comportamento de comparacao exata. */ }
+  return null;
+}
+
+/** O plugin so busca imagem do Instagram nos CDNs publicos usados pela rede. */
+function imagemInstagramPermitida(source) {
+  try {
+    const parsed = new URL(String(source || ""));
+    const host = parsed.hostname.toLowerCase();
+    const cdn = (domain) => host === domain || host.endsWith(`.${domain}`);
+    return parsed.protocol === "https:" && !parsed.username && !parsed.password && !parsed.port &&
+      (cdn("cdninstagram.com") || cdn("fbcdn.net"));
+  } catch { return false; }
+}
+
+function chaveSource(source) {
+  const url = normalizarSource(source);
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    if (!/^https?:$/.test(parsed.protocol)) return url;
+
+    if (HOSTS_INSTAGRAM.has(parsed.hostname.toLowerCase())) {
+      const instagram = parsed.pathname.match(/^\/(?:p|reel|reels)\/([A-Za-z0-9_-]+)\/?$/i);
+      // Shortcodes are case-sensitive: don't lowercase this identity.
+      if (instagram) return `instagram-post:${instagram[1]}`;
+    }
+    if (!HOSTS_X.has(parsed.hostname.toLowerCase())) return url;
+
+    const partes = parsed.pathname.split("/").filter(Boolean);
+    let id = "";
+    if (partes.length === 3 && partes[1].toLowerCase() === "status") id = partes[2];
+    else if (partes.length === 4 && partes[0].toLowerCase() === "i" &&
+      partes[1].toLowerCase() === "web" && partes[2].toLowerCase() === "status") id = partes[3];
+    // Keep the snowflake as a string; X IDs exceed Number's exact range.
+    if (/^\d+$/.test(id)) return `x-status:${id}`;
+
+  } catch { /* Non-URL source values retain their existing exact-match behavior. */ }
+  return url;
+}
+
+/** Removal candidates must share every source, not just one overlapping link. */
+function chaveConjuntoSources(source) {
+  const keys = [...new Set(fontesDoFrontmatter(source).map(chaveSource).filter(Boolean))].sort();
+  return keys.length ? JSON.stringify(keys) : "";
+}
+
 const CAMPO_CHEGADA = "corebrain_added_at";
 const ISO_CHEGADA = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/;
 
@@ -1896,7 +1956,9 @@ class Receptor {
       return this.lerCorpo(req, res, origin, MAX_CONTEUDO_CLIP, async (d) => this.gravarClip(d));
     }
 
-    if (req.method !== "POST" || url.pathname !== "/x-bookmarks") {
+    const origemBookmarks = url.pathname === "/instagram-saved" ? "Instagram" :
+      url.pathname === "/x-bookmarks" ? "X" : null;
+    if (req.method !== "POST" || !origemBookmarks) {
       return this.responder(res, 404, { erro: "rota desconhecida" }, origin);
     }
 
@@ -1905,7 +1967,11 @@ class Receptor {
         throw new Error("bookmarks invalido");
       }
       if (d.bookmarks.length > MAX_BOOKMARKS) throw new Error("bookmarks demais");
-      return this.gravar(d.bookmarks, d.pasta === undefined ? this.plugin.cfg.pastaBookmarks : d.pasta);
+      return this.gravar(
+        d.bookmarks,
+        d.pasta === undefined ? this.plugin.cfg.pastaBookmarks : d.pasta,
+        origemBookmarks,
+      );
     });
   }
 
@@ -1948,6 +2014,8 @@ class Receptor {
   }
 
   async notaComSource(source) {
+    const chave = chaveSource(source);
+    if (!chave) return null;
     const direto = this.plugin.notaComSource(source);
     if (direto) return direto;
     const vault = this.plugin.app.vault;
@@ -1955,9 +2023,9 @@ class Receptor {
       const naGaleria = this.plugin.pastas.some((p) => f.path.startsWith(p));
       if (!naGaleria) continue;
       const fm = this.plugin.app.metadataCache.getFileCache(f)?.frontmatter || {};
-      if (fontesDoFrontmatter(fm.source).includes(source)) return f;
+      if (fontesDoFrontmatter(fm.source).some((s) => chaveSource(s) === chave)) return f;
       if (!fm.source && typeof vault.cachedRead === "function") {
-        if (fontesDoYaml(await vault.cachedRead(f).catch(() => "")).includes(source)) return f;
+        if (fontesDoYaml(await vault.cachedRead(f).catch(() => "")).some((s) => chaveSource(s) === chave)) return f;
       }
     }
     return null;
@@ -1988,11 +2056,11 @@ class Receptor {
     return { ok: true, duplicata: false, caminho };
   }
 
-  gravar(bookmarks, pasta) {
-    return this.encadear(() => this._gravar(bookmarks, pasta));
+  gravar(bookmarks, pasta, origem = "X") {
+    return this.encadear(() => this._gravar(bookmarks, pasta, origem));
   }
 
-  async _gravar(bookmarks, pasta) {
+  async _gravar(bookmarks, pasta, origem = "X") {
     if (!Array.isArray(bookmarks) || bookmarks.length > MAX_BOOKMARKS) throw new Error("bookmarks invalido");
     const dir = pastaSegura(pasta, this.plugin.cfg.pastaBookmarks || "Clippings");
     for (const b of bookmarks) {
@@ -2006,7 +2074,8 @@ class Receptor {
 
     if (!vault.getAbstractFileByPath(dir)) await vault.createFolder(dir).catch(() => {});
 
-    // Indice unico por SOURCE (a URL do tweet), nao por nome de arquivo.
+    // Indice unico por identidade da fonte; URLs X com @handles diferentes
+    // ainda representam o mesmo post. A URL original nunca e regravada.
     const caminhos = new Set();
     const sources = new Set();
     for (const f of vault.getMarkdownFiles()) {
@@ -2014,12 +2083,12 @@ class Receptor {
       if (!naGaleria && !f.path.startsWith(dir + "/")) continue;
       if (f.path.startsWith(dir + "/")) caminhos.add(f.path);
       const fm = this.plugin.app.metadataCache.getFileCache(f)?.frontmatter || {};
-      for (const src of fontesDoFrontmatter(fm.source)) sources.add(src);
+      for (const src of fontesDoFrontmatter(fm.source)) sources.add(chaveSource(src));
       // Metadata can lag immediately after a write (and some test/adapters do
       // not expose frontmatter). Read the YAML as a fallback so a concurrent
       // sync cannot re-add a source just because the cache is stale.
       if (!fm.source && typeof vault.cachedRead === "function") {
-        for (const src of fontesDoYaml(await vault.cachedRead(f).catch(() => ""))) sources.add(src);
+        for (const src of fontesDoYaml(await vault.cachedRead(f).catch(() => ""))) sources.add(chaveSource(src));
       }
     }
 
@@ -2031,37 +2100,62 @@ class Receptor {
       return c;
     };
 
-    const aviso = new Notice("Recebendo bookmarks do X…", 0);
+    const eInstagram = origem === "Instagram" || origem === "instagram";
+    const rotulo = eInstagram ? "Salvos do Instagram" : "Bookmarks do X";
+    const aviso = new Notice(eInstagram ? "Recebendo salvos do Instagram…" : "Recebendo bookmarks do X…", 0);
     let criados = 0;
     let pulados = 0;
     let erros = 0;
 
+    // X supplies newest -> oldest. Select the first occurrence in that order
+    // (preserving duplicate semantics), then persist selected notes oldest-first
+    // so the gallery's recent sort reconstructs the X order.
+    const selecionados = new Set();
+    const sourceKeys = bookmarks.map((b) => chaveSource(
+      normalizarSource(b.source) || fonteDoYaml(b.conteudo),
+    ));
     for (let i = 0; i < bookmarks.length; i++) {
-      const b = bookmarks[i];
-      try {
-        const source = normalizarSource(b.source) || fonteDoYaml(b.conteudo);
-        if (source && sources.has(source)) {
-          pulados++;
-        } else {
-          const caminho = caminhoLivre(sanitizar(b.nome));
-          const file = await vault.create(caminho, b.conteudo);
-          await this.plugin.registrarChegada?.(file);
-          caminhos.add(caminho);
-          if (source) sources.add(source);
-          criados++;
-        }
-      } catch (e) {
-        erros++;
+      const sourceKey = sourceKeys[i];
+      if (sourceKey && sources.has(sourceKey)) {
+        pulados++;
+      } else {
+        selecionados.add(i);
+        if (sourceKey) sources.add(sourceKey);
       }
-      if (i % 25 === 0 || i === bookmarks.length - 1) {
-        aviso.setMessage(`Bookmarks do X: ${i + 1}/${bookmarks.length} · ${criados} novos`);
+    }
+
+    for (let i = bookmarks.length - 1; i >= 0; i--) {
+      const b = bookmarks[i];
+      if (selecionados.has(i)) {
+        let arquivoCriado = null;
+        try {
+          const caminho = caminhoLivre(sanitizar(b.nome));
+          arquivoCriado = await vault.create(caminho, b.conteudo);
+          if (eInstagram) {
+            this.plugin._instagramSavedPaths ||= new Set();
+            this.plugin._instagramSavedPaths.add(arquivoCriado.path);
+          }
+          await this.plugin.registrarChegada?.(arquivoCriado, true);
+          caminhos.add(caminho);
+          criados++;
+        } catch (e) {
+          erros++;
+        } finally {
+          // Covers ficam fora do tempo de resposta da ponte; falha de imagem
+          // nunca transforma uma nota criada em erro nem apaga dados.
+          if (eInstagram && arquivoCriado) this.plugin.enfileirarCapaInstagram?.(arquivoCriado);
+        }
+      }
+      const processados = bookmarks.length - i;
+      if (processados % 25 === 0 || i === 0) {
+        aviso.setMessage(`${rotulo}: ${processados}/${bookmarks.length} · ${criados} novos`);
         await new Promise((r) => setTimeout(r, 0)); // deixa a UI respirar
       }
     }
 
     aviso.hide();
     new Notice(
-      `Bookmarks do X: ${criados} criados` +
+      `${rotulo}: ${criados} criados` +
         (pulados ? ` · ${pulados} já existiam` : "") +
         (erros ? ` · ${erros} com erro` : ""),
       6000,
@@ -2583,41 +2677,51 @@ class ClippingsGallery extends Plugin {
   /** Add an immutable arrival timestamp to one newly-created gallery note.
    *  The per-path promise also coalesces the create event with the explicit
    *  capture-path call, preventing a second frontmatter write. */
-  registrarChegada(file) {
+  registrarChegada(file, falharSeErro = false) {
     const caminho = String(file?.path || "");
     if (!caminho.endsWith(".md") || !this.pastas?.some((p) => caminho.startsWith(p))) return Promise.resolve(false);
     this._chegadaJobs ||= new Map();
-    const pendente = this._chegadaJobs.get(caminho);
-    if (pendente) return pendente;
-
-    const trabalho = this._registrarChegada(file)
-      .catch((e) => {
-        console.error("clippings-gallery: nao consegui registrar chegada em", caminho, e);
-        return false;
-      })
-      .finally(() => {
-        if (this._chegadaJobs.get(caminho) === trabalho) this._chegadaJobs.delete(caminho);
-      });
-    this._chegadaJobs.set(caminho, trabalho);
-    return trabalho;
+    let trabalho = this._chegadaJobs.get(caminho);
+    if (!trabalho) {
+      trabalho = this._registrarChegada(file).then(
+        (resultado) => {
+          if (this._chegadaJobs.get(caminho) === trabalho) this._chegadaJobs.delete(caminho);
+          return resultado;
+        },
+        (e) => {
+          if (this._chegadaJobs.get(caminho) === trabalho) this._chegadaJobs.delete(caminho);
+          console.error("clippings-gallery: nao consegui registrar chegada em", caminho, e);
+          throw e;
+        },
+      );
+      this._chegadaJobs.set(caminho, trabalho);
+    }
+    // Ordinary create events stay best-effort; the X import asks to surface a
+    // failed stamp so it can leave its sync checkpoint pending.
+    return falharSeErro ? trabalho : trabalho.catch(() => false);
   }
 
   async _registrarChegada(file) {
     const cache = this.app.metadataCache?.getFileCache?.(file)?.frontmatter || file.frontmatter || {};
     if (chegadaValida(cache[CAMPO_CHEGADA])) return false;
-    const timestamp = new Date().toISOString();
     let mudou = false;
 
     if (this.app.fileManager?.processFrontMatter) {
       await this.app.fileManager.processFrontMatter(file, (fm) => {
         if (!chegadaValida(fm[CAMPO_CHEGADA])) {
-          fm[CAMPO_CHEGADA] = timestamp;
+          // Use 1ms increments if a batch's writes land in the same clock tick.
+          const ultimo = Number.isFinite(this._ultimoCarimboChegada)
+            ? this._ultimoCarimboChegada
+            : -Infinity;
+          const instante = Math.max(Date.now(), ultimo + 1);
+          fm[CAMPO_CHEGADA] = new Date(instante).toISOString();
+          this._ultimoCarimboChegada = instante;
           mudou = true;
         }
       });
       return mudou;
     }
-    return false;
+    throw new Error("fileManager.processFrontMatter indisponivel para registrar chegada");
   }
 
   /** Normaliza: aceita "Clippings" ou "Clippings/" e ignora linha vazia. */
@@ -2745,15 +2849,15 @@ class ClippingsGallery extends Plugin {
     // so nota nova: renomear/editar uma antiga nao pode disparar isso
     if (Date.now() - file.stat.ctime > 60000) return;
 
-    const src = normalizarSource(this.app.metadataCache.getFileCache(file)?.frontmatter?.source);
-    if (!src) return;
+    const sourcesKey = chaveConjuntoSources(this.app.metadataCache.getFileCache(file)?.frontmatter?.source);
+    if (!sourcesKey) return;
     const outra = this.app.vault
       .getMarkdownFiles()
       .find(
         (f) =>
           f.path !== file.path &&
           this.pastas.some((p) => f.path.startsWith(p)) &&
-          normalizarSource(this.app.metadataCache.getFileCache(f)?.frontmatter?.source) === src
+          chaveConjuntoSources(this.app.metadataCache.getFileCache(f)?.frontmatter?.source) === sourcesKey
       );
     if (!outra) return;
 
@@ -2776,19 +2880,19 @@ class ClippingsGallery extends Plugin {
     const porSource = new Map();
     for (const f of this.app.vault.getMarkdownFiles()) {
       if (!this.pastas.some((p) => f.path.startsWith(p))) continue;
-      const s = normalizarSource(this.app.metadataCache.getFileCache(f)?.frontmatter?.source);
-      if (!s) continue;
-      if (!porSource.has(s)) porSource.set(s, []);
-      porSource.get(s).push(f);
+      const source = chaveConjuntoSources(this.app.metadataCache.getFileCache(f)?.frontmatter?.source);
+      if (!source) continue;
+      if (!porSource.has(source)) porSource.set(source, []);
+      porSource.get(source).push(f);
     }
-    const extras = [];
+    const extras = new Set();
     for (const [, fs] of porSource) {
       if (fs.length < 2) continue;
       // fica a mais antiga; as outras sao as copias
       fs.sort((a, b) => a.stat.ctime - b.stat.ctime);
-      extras.push(...fs.slice(1));
+      for (const f of fs.slice(1)) extras.add(f);
     }
-    return extras;
+    return [...extras];
   }
 
   /**
@@ -2824,7 +2928,7 @@ class ClippingsGallery extends Plugin {
   /** Primeira nota da galeria com este source, ou null. E o que decide
    *  duplicata — em todo lugar: ponte, botao + e consulta da extensao. */
   notaComSource(url) {
-    const alvo = normalizarSource(url);
+    const alvo = chaveSource(url);
     if (!alvo) return null;
     return (
       this.app.vault
@@ -2832,7 +2936,8 @@ class ClippingsGallery extends Plugin {
         .find(
           (f) =>
             this.pastas.some((p) => f.path.startsWith(p)) &&
-            normalizarSource(this.app.metadataCache.getFileCache(f)?.frontmatter?.source) === alvo
+            fontesDoFrontmatter(this.app.metadataCache.getFileCache(f)?.frontmatter?.source)
+              .some((source) => chaveSource(source) === alvo)
         ) || null
     );
   }
@@ -2914,8 +3019,15 @@ class ClippingsGallery extends Plugin {
 
     // a URL guardada pode estar morta (Instagram): busca uma nova a partir do post
     let url = String(fm.image || "");
+    const instagramImportado = this._instagramSavedPaths?.has(file.path);
+    // Nunca busque a pagina do post como fallback para notas do Instagram: alem
+    // de nao ser confiavel para OG, isso faria um import sem imagem virar uma
+    // requisicao ao dominio da origem. Para Instagram, so o CDN allowlistado.
+    if (instagramImportado && (!imagemInstagramPermitida(url) || CAPA_GENERICA.test(url))) {
+      return url || fm.source ? "bloqueado" : "sem imagem";
+    }
     let bytes = CAPA_GENERICA.test(url) ? null : await this.baixarBytes(url);
-    if (!bytes && fm.source) {
+    if (!instagramImportado && !bytes && fm.source) {
       const nova = await this.buscarCapa(normalizarSource(fm.source));
       if (nova && nova !== url) {
         url = nova;
@@ -3120,6 +3232,17 @@ class ClippingsGallery extends Plugin {
     if (!this.pastas.some((p) => file.path.startsWith(p)) || !fm?.source) return;
     const temCopia = fm.thumb && this.app.vault.getAbstractFileByPath(String(fm.thumb));
     if (fm.image && temCopia) return; // ja tem capa e copia local
+    if (urlInstagram(fm.source)) {
+      if (this._instagramSavedPaths?.has(file.path)) {
+        // O import traz a imagem do feed. Nao tente OG no post logado (nem aceite
+        // URLs arbitrarias como image); downloads rodam fora do request e em fila.
+        if (this.cfg.capaLocal !== false && imagemInstagramPermitida(fm.image) && !CAPA_GENERICA.test(fm.image)) {
+          this.enfileirarCapaInstagram(file);
+        }
+      }
+      // Uma mudanca de metadata numa nota antiga nao e motivo para reescreve-la.
+      return;
+    }
     if (this.emAndamento.has(file.path)) return; // processFrontMatter re-dispara "changed"
     this.emAndamento.add(file.path);
     try {
@@ -3146,6 +3269,55 @@ class ClippingsGallery extends Plugin {
     } finally {
       this.emAndamento.delete(file.path);
     }
+  }
+
+  /** Capa IG e opcional: baixa fora do POST serializado e sem rajada ao CDN. */
+  enfileirarCapaInstagram(file) {
+    const caminho = String(file?.path || "");
+    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter || {};
+    if (this.cfg.capaLocal === false || !caminho || !this._instagramSavedPaths?.has(caminho) ||
+      !imagemInstagramPermitida(fm.image) ||
+      CAPA_GENERICA.test(String(fm.image || ""))) return;
+    this._instagramCoverQueue ||= [];
+    this._instagramCoverQueued ||= new Set();
+    this._instagramCoverAttempted ||= new Set();
+    if (this._instagramCoverQueued.has(caminho) || this._instagramCoverAttempted.has(caminho)) return;
+    this._instagramCoverAttempted.add(caminho);
+    this._instagramCoverQueued.add(caminho);
+    this._instagramCoverQueue.push(file);
+    if (this._instagramCoverDrain) return;
+
+    const drenar = async () => {
+      let falhas = 0;
+      try {
+        while (this._instagramCoverQueue.length) {
+          const proximo = this._instagramCoverQueue.shift();
+          try {
+            const resultado = await this.baixarCapa(proximo);
+            if (resultado === "falhou" || resultado === "sem imagem") falhas++;
+          } catch (e) {
+            falhas++;
+            console.error("clippings-gallery: capa Instagram falhou em", proximo.path, e);
+          } finally {
+            this._instagramCoverQueued.delete(proximo.path);
+          }
+          if (this._instagramCoverQueue.length) await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        if (falhas) new Notice(`Capas do Instagram: ${falhas} falharam; os clippings foram mantidos.`, 8000);
+      } finally {
+        this._instagramCoverDrain = null;
+        // Uma nota pode entrar enquanto a fila termina, sem deixar trabalho
+        // pendurado ate a proxima mudanca de metadata.
+        if (this._instagramCoverQueue.length) this._iniciarFilaCapasInstagram();
+      }
+    };
+    this._iniciarFilaCapasInstagram = () => {
+      if (!this._instagramCoverDrain && this._instagramCoverQueue?.length) {
+        const trabalho = drenar();
+        this._instagramCoverDrain = trabalho;
+      }
+    };
+    this._iniciarFilaCapasInstagram();
   }
 
   /**
@@ -3254,6 +3426,22 @@ class ClippingsGallery extends Plugin {
    *  og:image — mesma leitura do botao "+". */
   async buscarCapa(url) {
     if (!url) return "";
+    // YouTube watch pages can return 429 even while their thumbnail CDN works.
+    // Resolve only validated video URLs; channels and other sites still use OG.
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.toLowerCase();
+      const parts = parsed.pathname.split("/").filter(Boolean);
+      let id = "";
+      if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+        if (host === "youtu.be") id = parts.length === 1 ? parts[0] : "";
+        else if (["youtube.com", "www.youtube.com", "m.youtube.com"].includes(host)) {
+          if (parsed.pathname === "/watch") id = parsed.searchParams.get("v") || "";
+          else if (parts.length === 2 && ["shorts", "embed", "live"].includes(parts[0])) id = parts[1];
+        }
+      }
+      if (/^[A-Za-z0-9_-]{11}$/.test(id)) return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+    } catch { /* Preserve existing handling for non-URL inputs. */ }
     const { imagem } = lerOg((await requestUrl({ url })).text);
     return imagem ? new URL(imagem, url).href : ""; // resolve caminho relativo
   }
