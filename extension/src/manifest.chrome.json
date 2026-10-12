@@ -3,7 +3,7 @@
 	"default_locale": "en",
 	"name": "Corebrain Web Clipper",
 	"homepage_url": "https://github.com/guilhermexp/Corebrain",
-	"version": "1.8.0",
+	"version": "1.8.1",
 	"description": "Unofficial Corebrain Web Clipper fork for the Corebrain Obsidian plugin.",
 	"permissions": [
 		"activeTab",

@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import browser from './browser-polyfill';
-import { buscarBookmarks, bookmarkParaNota, salvarComoNotas, montarUriObsidian, pluginDisponivel, enviarPelaPonte, clipPelaPonte, jaNaGaleria, podeAvancarMarcador, DEFAULT_X_BOOKMARK_FOLDER } from './x-bookmarks';
+import { buscarBookmarks, bookmarkParaNota, pluginDisponivel, enviarPelaPonte, clipPelaPonte, jaNaGaleria, podeAvancarMarcador, DEFAULT_X_BOOKMARK_FOLDER } from './x-bookmarks';
 
 /**
  * O que importa aqui e a parada incremental e a paginacao: sao um loop com
@@ -166,59 +166,6 @@ describe('bookmarkParaNota', () => {
 
 	test('sem midia, nao emite image vazio', () => {
 		expect(bookmarkParaNota({ ...base, midia: [] }).conteudo).not.toContain('image:');
-	});
-});
-
-describe('salvarComoNotas roda no service worker', () => {
-	const bm = {
-		id: '1', autor: 'a', nomeAutor: 'A', texto: 'oi', url: 'https://x.com/a/status/1',
-		criadoEm: 'Sun Aug 02 16:10:04 +0000 2026', midia: [], links: [],
-	};
-
-	test('nao usa document nem window (o SW nao tem DOM)', async () => {
-		// se algo do modulo tocar document/window, isto explode como em producao
-		const doc = (globalThis as any).document;
-		const win = (globalThis as any).window;
-		delete (globalThis as any).document;
-		delete (globalThis as any).window;
-		try {
-			const urls: string[] = [];
-			const r = await salvarComoNotas([bm], 'X Bookmarks', 'v', async (u) => { urls.push(u); }, undefined, 0);
-			expect(r).toEqual({ salvos: 1, erros: 0 });
-			expect(urls[0]).toContain('obsidian://new');
-		} finally {
-			if (doc) (globalThis as any).document = doc;
-			if (win) (globalThis as any).window = win;
-		}
-	});
-
-	test('salva bookmarks do X do mais antigo para o mais recente', async () => {
-		const batch = [
-			{ ...bm, id: '3', url: 'https://x.com/a/status/3' }, // mais recente
-			{ ...bm, id: '2', url: 'https://x.com/a/status/2' },
-			{ ...bm, id: '1', url: 'https://x.com/a/status/1' }, // mais antigo
-		];
-		const fontes: string[] = [];
-		await salvarComoNotas(batch, 'X Bookmarks', 'v', async (uri) => {
-			const content = new URL(uri).searchParams.get('content') || '';
-			fontes.push(content.match(/^source: "([^"]+)"/m)?.[1] || '');
-		}, undefined, 0);
-		expect(fontes).toEqual(batch.map((item) => item.url).reverse());
-	});
-
-	test('a URI leva silent, vault, pasta e conteudo', () => {
-		const u = montarUriObsidian('minha nota', 'corpo', 'X Bookmarks', 'meuvault');
-		expect(u).toContain('silent=true');
-		expect(u).toContain('vault=meuvault');
-		expect(u).toContain(encodeURIComponent('X Bookmarks/minha nota'));
-		expect(u).toContain('content=corpo');
-	});
-
-	test('uma nota que falha nao derruba o lote inteiro', async () => {
-		let n = 0;
-		const r = await salvarComoNotas([bm, { ...bm, id: '2' }, { ...bm, id: '3' }], 'p', 'v',
-			async () => { if (++n === 2) throw new Error('falhou'); }, undefined, 0);
-		expect(r).toEqual({ salvos: 2, erros: 1 });
 	});
 });
 

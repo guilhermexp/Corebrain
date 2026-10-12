@@ -78,10 +78,26 @@ export function initXSync(): void {
 				mostrar(r?.error || 'Falhou ao sincronizar.', 0, true);
 				esconder(8000);
 				return;
+			} else if (r.erros > 0 || r.incompleto) {
+				const salvos = Number(r.salvos) || 0;
+				const pulados = Number(r.pulados) || 0;
+				const erros = Number(r.erros) || 0;
+				const motivo = erros > 0
+					? `Sincronização com falhas — ${erros} erros`
+					: 'Sincronização parcial';
+				const contagem = [
+					salvos > 0 ? `${salvos} salvos` : '',
+					pulados > 0 ? `${pulados} já existiam` : '',
+				].filter(Boolean).join(' · ');
+				mostrar(`${motivo}${contagem ? ` · ${contagem}` : ''}`, 0, true);
+				esconder(8000);
+				return;
+			} else if (r.salvos === 0 && r.pulados > 0) {
+				mostrar(`Tudo em dia — ${r.pulados} já existiam.`, 100);
 			} else if (r.salvos === 0) {
 				mostrar('Tudo em dia — nenhum bookmark novo.', 100);
 			} else {
-				mostrar(`${r.salvos} bookmarks salvos${r.erros ? ` · ${r.erros} com erro` : ''}`, 100);
+				mostrar(`${r.salvos} bookmarks salvos${r.pulados ? ` · ${r.pulados} já existiam` : ''}`, 100);
 			}
 			esconder();
 		} catch (err) {

@@ -7,11 +7,11 @@ import { TextHighlightData } from './utils/highlighter';
 import { debounce } from './utils/debounce';
 import { Settings } from './types/types';
 import { debugLog } from './utils/debug';
-import { estaLogadoNoX, buscarBookmarks, observarQueryId, salvarComoNotas, pluginDisponivel, enviarPelaPonte, DEFAULT_X_BOOKMARK_FOLDER, podeAvancarMarcador } from './utils/x-bookmarks';
+import { estaLogadoNoX, buscarBookmarks, observarQueryId, pluginDisponivel, enviarPelaPonte, DEFAULT_X_BOOKMARK_FOLDER, podeAvancarMarcador, BridgeAuthenticationError } from './utils/x-bookmarks';
 import { buscarSalvosInstagram, enviarSalvosInstagram, DEFAULT_INSTAGRAM_SAVED_FOLDER } from './utils/instagram-saved';
 import { createInstagramSyncController, INSTAGRAM_SYNC_STORAGE_KEY } from './utils/instagram-sync';
 import { startInstagramSyncPinned } from './utils/instagram-sync-start';
-import { incrementStat, loadSettings } from './utils/storage-utils';
+import { incrementStat } from './utils/storage-utils';
 import { precisaFallbackWebRequest } from './utils/webrequest-guard';
 
 const YOUTUBE_EMBED_RULE_ID = 9001;
@@ -120,6 +120,8 @@ if (typeof browser !== 'undefined' && precisaFallbackWebRequest({
 }
 
 let xSyncCancelado = false;
+let xSyncEmAndamento = false;
+const X_SYNC_BRIDGE_REQUIRED_ERROR = 'Sincronização do X cancelada: abra o Obsidian, ative o plugin Corebrain e confira o pareamento da extensão antes de tentar novamente.';
 
 const instagramSync = createInstagramSyncController({
 	bridgeAvailable: pluginDisponivel,
@@ -158,11 +160,6 @@ async function abrirUrlNaAbaDoSync(url: string): Promise<void> {
 	if (xSyncTabId !== undefined) await browser.tabs.update(xSyncTabId, { url });
 }
 
-async function fecharAbaDoSync(): Promise<void> {
-	if (xSyncTabId === undefined) return;
-	try { await browser.tabs.remove(xSyncTabId); } catch { /* ja fechada */ }
-	xSyncTabId = undefined;
-}
 let sidePanelOpenWindows: Set<number> = new Set();
 let highlighterModeState: { [tabId: number]: boolean } = {};
 let readerModeState: { [tabId: number]: boolean } = {};
@@ -464,6 +461,11 @@ browser.runtime.onMessage.addListener((request: unknown, sender: browser.Runtime
 
 		// busca + grava, reportando as duas fases pro popup
 		if (typedRequest.action === 'x-bookmarks-sync-e-salvar') {
+			if (xSyncEmAndamento) {
+				sendResponse({ success: false, error: 'Uma sincronização do X já está em andamento.' });
+				return true;
+			}
+			xSyncEmAndamento = true;
 			(async () => {
 				try {
 					xSyncCancelado = false;
@@ -474,6 +476,12 @@ browser.runtime.onMessage.addListener((request: unknown, sender: browser.Runtime
 					// plugin. Check before contacting X so we never do paid/network work
 					// only to discard the batch after an auth failure.
 					const ponteDisponivel = await pluginDisponivel();
+					if (!ponteDisponivel) {
+						return sendResponse({
+							success: false,
+							error: X_SYNC_BRIDGE_REQUIRED_ERROR,
+						});
+					}
 
 					const r = await buscarBookmarks(ultimo, (qtd, pagina) => {
 						browser.runtime.sendMessage({ action: 'x-bookmarks-progress', qtd, pagina }).catch(() => {});
@@ -481,30 +489,20 @@ browser.runtime.onMessage.addListener((request: unknown, sender: browser.Runtime
 
 					if (xSyncCancelado) return sendResponse({ success: true, salvos: 0, erros: 0, cancelado: true });
 
-					const settings = await loadSettings();
-					const vault = settings.vaults?.[0] || '';
-					// Preferimos a ponte com o plugin: sem ela, cada nota ativaria o
-					// Obsidian e o usuario nao consegue nem trocar de janela.
-					let res: { salvos: number; pulados: number; erros: number };
-					if (ponteDisponivel) {
-						browser.runtime.sendMessage({
-							action: 'x-bookmarks-saving', feitos: 0, total: r.novos.length, viaPlugin: true,
-						}).catch(() => {});
-						const p = await enviarPelaPonte(r.novos, pasta);
-						res = { salvos: p.criados, pulados: p.pulados, erros: p.erros };
-					} else {
-						const fallback = await salvarComoNotas(r.novos, pasta, vault, abrirUrlNaAbaDoSync, (feitos, total) => {
-							browser.runtime.sendMessage({ action: 'x-bookmarks-saving', feitos, total }).catch(() => {});
-						});
-						res = { ...fallback, pulados: 0 };
-					}
+					browser.runtime.sendMessage({
+						action: 'x-bookmarks-saving', feitos: 0, total: r.novos.length, viaPlugin: true,
+					}).catch(() => {});
+					// O sync em lote depende do plugin para deduplicar URLs. Nunca grave
+					// por obsidian:// como fallback: isso abre o app por bookmark e cria
+					// cópias sem a checagem da galeria.
+					const p = await enviarPelaPonte(r.novos, pasta);
+					const res = { salvos: p.criados, pulados: p.pulados, erros: p.erros };
 
 					// Advance only when every fetched bookmark was either created or
 					// already present. Partial failures must remain pending next run.
 					if (podeAvancarMarcador(r.novos.length, res.salvos, res.pulados, res.erros, r.alcancouFim)) {
 						await browser.storage.local.set({ x_bookmarks_last_id: r.novos[0].id });
 					}
-					await fecharAbaDoSync();
 					sendResponse({
 						success: true,
 						...res,
@@ -513,8 +511,12 @@ browser.runtime.onMessage.addListener((request: unknown, sender: browser.Runtime
 						paginas: r.paginas,
 					});
 				} catch (e) {
-					await fecharAbaDoSync();
-					sendResponse({ success: false, error: (e as Error).message });
+					const error = e instanceof BridgeAuthenticationError
+						? X_SYNC_BRIDGE_REQUIRED_ERROR
+						: (e as Error).message;
+					sendResponse({ success: false, error });
+				} finally {
+					xSyncEmAndamento = false;
 				}
 			})();
 			return true;

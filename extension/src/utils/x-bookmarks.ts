@@ -305,27 +305,6 @@ export function bookmarkParaNota(b: XBookmark): { nome: string; conteudo: string
 	return { nome: nomeDaNota(b), conteudo: fm.join('\n'), source: b.url };
 }
 
-/**
- * Monta a URI do Obsidian para uma nota. Funcao pura de proposito: o sync roda
- * no service worker, que NAO tem DOM — importar o modulo de UI (saveToObsidian)
- * aqui quebrava com "document is not defined", porque ele puxa i18n/clipboard.
- */
-export function montarUriObsidian(
-	nome: string,
-	conteudo: string,
-	pasta: string,
-	vault: string,
-): string {
-	const caminho = pasta && !pasta.endsWith('/') ? `${pasta}/` : pasta;
-	const arquivo = nome.replace(/[\\/:*?"<>|#^[\]]/g, '').trim();
-	return (
-		`obsidian://new?file=${encodeURIComponent(caminho + arquivo)}` +
-		'&silent=true' + // em lote nunca abre a nota
-		(vault ? `&vault=${encodeURIComponent(vault)}` : '') +
-		`&content=${encodeURIComponent(conteudo)}`
-	);
-}
-
 export type Duplicata = { existe: boolean; caminho: string | null };
 
 function authError(response: Response): BridgeAuthenticationError | null {
@@ -432,39 +411,6 @@ export async function clipPelaPonte(
 		if (e instanceof BridgeRequestError) throw e;
 		return null;
 	}
-}
-
-/**
- * Fallback: grava nota a nota via `obsidian://`. Usado so quando o plugin nao
- * esta disponivel — rouba foco a cada nota, entao nao serve pra lote grande.
- */
-export async function salvarComoNotas(
-	bookmarks: XBookmark[],
-	pasta = DEFAULT_X_BOOKMARK_FOLDER,
-	vault: string,
-	abrir: (url: string) => Promise<void>,
-	aoProgredir?: (feitos: number, total: number) => void,
-	pausaMs = 120,
-): Promise<{ salvos: number; erros: number }> {
-	let salvos = 0;
-	let erros = 0;
-
-	// X returns newest -> oldest, but Obsidian's recent gallery sort follows
-	// note creation time. Save in reverse so fallback imports keep X's order.
-	for (let i = bookmarks.length - 1; i >= 0; i--) {
-		const b = bookmarks[i];
-		try {
-			const { nome, conteudo } = bookmarkParaNota(b);
-			await abrir(montarUriObsidian(nome, conteudo, pasta, vault));
-			salvos++;
-		} catch (e) {
-			erros++;
-			debugLog('XBookmarks', 'falhou ao salvar', b.id, e);
-		}
-		aoProgredir?.(bookmarks.length - i, bookmarks.length);
-		if (pausaMs) await new Promise((r) => setTimeout(r, pausaMs));
-	}
-	return { salvos, erros };
 }
 
 /**
