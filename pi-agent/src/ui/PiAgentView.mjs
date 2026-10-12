@@ -1007,7 +1007,6 @@ export class PiAgentView extends f.ItemView {
             }
           },
           onTextDelta: (o) => {
-            if (!n.thinkingUserSet) n.thinkingExpanded = false;
             if (!this.isCurrentThread(t)) return;
             this.thinkingDisclosureExpanded = n.thinkingExpanded;
             this.liveThinkingSetExpanded?.(n.thinkingExpanded);

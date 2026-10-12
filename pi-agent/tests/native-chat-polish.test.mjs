@@ -238,8 +238,17 @@ describe("native chat polish", () => {
 
   it("preserves a user-set thinking disclosure state when a run completes or fails", () => {
     expect(viewSource.match(/n\.thinkingUserSet \? n\.thinkingExpanded : false/g)).toHaveLength(2);
-    expect(viewSource).toContain("if (!n.thinkingUserSet) n.thinkingExpanded = false");
     expect(viewSource).toContain("this.liveThinkingSetExpanded?.(n.thinkingExpanded)");
+  });
+
+  it("keeps live thinking expanded while answer text streams", () => {
+    const onTextDelta = viewSource.match(
+      /onTextDelta: \(o\) => \{([\s\S]*?)\n          \},\n          onPromptAccepted/
+    );
+
+    expect(onTextDelta).not.toBeNull();
+    expect(onTextDelta[1]).not.toContain("n.thinkingExpanded = false");
+    expect(onTextDelta[1]).toContain("this.liveThinkingSetExpanded?.(n.thinkingExpanded)");
   });
 
   it("keeps guarded bulk deletion directly visible and removes archive-all", () => {
