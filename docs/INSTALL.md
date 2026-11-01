@@ -7,7 +7,7 @@ or build them locally as described below.
 
 ## Obsidian plugin (desktop only)
 
-1. Download `Corebrain-plugin-0.4.0.zip` and extract it.
+1. Download `Corebrain-plugin-0.4.1.zip` and extract it.
 2. Copy the contained `clippings-gallery/` directory to
    `<vault>/.obsidian/plugins/`. For a manually downloaded release, copy the
    five standalone root files (`main.js`, `manifest.json`, `styles.css`,
@@ -29,7 +29,7 @@ bulk backfill those notes.
 
 The supported browser installation is an unpacked build:
 
-1. Download and extract `Corebrain-extension-chrome-1.8.0.zip`, or build
+1. Download and extract `Corebrain-extension-chrome-1.8.2.zip`, or build
    `extension/dist/` locally.
 2. Open `chrome://extensions` (or `edge://extensions`).
 3. Enable **Developer mode**, choose **Load unpacked**, and select the extracted
@@ -40,7 +40,7 @@ before loading a new copy if the browser reports a duplicate extension.
 
 ## Firefox development build
 
-`Corebrain-extension-firefox-development-1.8.0.zip` is optional and is an
+`Corebrain-extension-firefox-development-1.8.2.zip` is optional and is an
 unsigned development artifact:
 
 1. Open `about:debugging#/runtime/this-firefox`.
@@ -77,8 +77,8 @@ On macOS, closing the vault window hides it and leaves the bridge listening.
 Choose Quit Obsidian to exit. Clicking the Dock icon shows the same window
 again; disabling the plugin removes that close handler. A capture received
 while the window is hidden is written without opening a note or the gallery.
-If Obsidian is unavailable, use the extension's direct capture path instead of
-expecting the bridge to work.
+If Obsidian is unavailable, the extension keeps the capture available and reports
+that saving was not confirmed. Reopen Obsidian before trying again.
 
 Note on cover fetching and network proxies: cover images and the open-graph
 metadata used to find them are retrieved by a direct Node network client that

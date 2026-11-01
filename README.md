@@ -18,7 +18,7 @@ bridge. See [installation](docs/INSTALL.md), the [feature inventory](docs/FEATUR
 
 ## Install
 
-Download the ZIPs from [release v0.4.0](https://github.com/guilhermexp/Corebrain/releases/tag/v0.4.0), or build locally. The
+Download the ZIPs from [release v0.4.1](https://github.com/guilhermexp/Corebrain/releases/tag/v0.4.1), or build locally. The
 plugin archive contains a `clippings-gallery/` directory with only
 `main.js`, `manifest.json`, `styles.css`, `LICENSE` and `window-lifecycle.js`.
 The same five runtime files are also emitted at the release directory root for
