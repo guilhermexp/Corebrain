@@ -19,12 +19,16 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: extension/package-lock.json
-
+          cache-dependency-path: |
+            package-lock.json
+            extension/package-lock.json
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+
+      - name: Install root dependencies
+        run: npm ci
 
       - name: Install extension dependencies
         run: npm ci --prefix extension
@@ -33,8 +37,7 @@ jobs:
         run: node test.js
 
       - name: Run Node regression and bridge tests
-        run: node --test tests/plugin-regressions.test.cjs tests/bridge-http.cjs tests/bridge-onload.cjs tests/search.test.cjs tests/arrival.test.cjs tests/open-mode.test.cjs
-
+        run: node --test tests/*.test.cjs tests/bridge-*.cjs
       - name: Run extension tests
         run: npm test --prefix extension
 

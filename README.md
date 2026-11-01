@@ -20,10 +20,14 @@ bridge. See [installation](docs/INSTALL.md), the [feature inventory](docs/FEATUR
 
 Download the ZIPs from [release v0.4.0](https://github.com/guilhermexp/Corebrain/releases/tag/v0.4.0), or build locally. The
 plugin archive contains a `clippings-gallery/` directory with only
-`main.js`, `manifest.json`, `styles.css` and `LICENSE`. The same four runtime
-files are also emitted at the release directory root for manual community
-plugin installation (release uploads flatten directories, so root assets are
+`main.js`, `manifest.json`, `styles.css`, `LICENSE` and `window-lifecycle.js`.
+The same five runtime files are also emitted at the release directory root for
+manual community plugin installation (release uploads flatten directories, so root assets are
 intentional).
+
+The plugin in this checkout is version 0.4.1 and requires Obsidian 1.11.4 or
+newer. Its protocol 2 bridge pairs with Corebrain Web Clipper 1.8.2; update
+both components together.
 
 Corebrain 0.4.0 adds local, all-term search across clipping metadata and
 Markdown body text. Search is case- and accent-insensitive, highlights matches

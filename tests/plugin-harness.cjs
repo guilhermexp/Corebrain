@@ -366,11 +366,13 @@ function makeApp(files = []) {
       stored.delete(file.path);
     },
   };
-  const app = { vault, metadataCache, workspace, fileManager };
+  const secrets = new Map([["corebrain-modelo-chave", "test-key"]]);
+  const secretStorage = { getSecret: (id) => secrets.get(id) ?? null, setSecret: (id, value) => { if (value) secrets.set(id, value); else secrets.delete(id); } };
+  const app = { vault, metadataCache, workspace, fileManager, secretStorage };
   return { app, files: allFiles, metadataChanged, vaultEvents, stored, binary };
 }
 
-function loadMain({ requestUrl = async () => ({ text: "", json: {}, status: 200 }), clock, DateImpl = Date } = {}) {
+function loadMain({ requestUrl = async () => ({ text: "", json: {}, status: 200 }), clock, DateImpl = Date, httpModule, httpsModule, dnsModule, imageBitmap = global.createImageBitmap, SettingClass = FakeSetting, processImpl = { platform: "linux" }, modules = {} } = {}) {
   FakeNotice.all = [];
   const source = fs.readFileSync(`${__dirname}/../main.js`, "utf8");
   const obsidian = {
@@ -378,24 +380,29 @@ function loadMain({ requestUrl = async () => ({ text: "", json: {}, status: 200 
     ItemView: FakeItemView,
     Notice: FakeNotice,
     requestUrl,
+    parseYaml: require("yaml").parse,
     PluginSettingTab: FakeSettingTab,
-    Setting: FakeSetting,
+    Setting: SettingClass,
     setIcon() {},
     Modal: FakeModal,
   };
-  const document = {
-    createElementNS: (_ns, tag) => new FakeElement(tag),
-    createElement: (tag) => (tag === "img" ? new FakeImage() : new FakeElement(tag)),
-    body: new FakeElement("body"),
-  };
+  const document = new FakeElement("document");
+  document.createElementNS = (_ns, tag) => new FakeElement(tag);
+  document.createElement = (tag) => (tag === "img" ? new FakeImage() : new FakeElement(tag));
+  document.body = new FakeElement("body");
   const timers = clock || { setTimeout, clearTimeout };
+  const semRede = () => { throw new Error("network disabled in tests"); };
   const sandbox = {
     module: { exports: {} },
     exports: {},
     console,
+    process: processImpl,
     require(name) {
+      if (Object.prototype.hasOwnProperty.call(modules, name)) return modules[name];
       if (name === "obsidian") return obsidian;
-      if (name === "http") return { createServer: () => ({ on() {}, listen() {}, close() {} }) };
+      if (name === "http") return httpModule || { createServer: () => ({ on() {}, listen() {}, close() {} }), request: semRede };
+      if (name === "https") return httpsModule || { request: semRede };
+      if (name === "dns") return dnsModule || { lookup: semRede };
       return require(name);
     },
     document,
@@ -405,7 +412,7 @@ function loadMain({ requestUrl = async () => ({ text: "", json: {}, status: 200 
     Buffer,
     Blob: global.Blob,
     OffscreenCanvas: global.OffscreenCanvas,
-    createImageBitmap: global.createImageBitmap,
+    createImageBitmap: imageBitmap,
     IntersectionObserver: class { observe() {} disconnect() {} },
     ResizeObserver: class { observe() {} disconnect() {} },
     getComputedStyle: () => ({ getPropertyValue: () => "300" }),
@@ -414,9 +421,9 @@ function loadMain({ requestUrl = async () => ({ text: "", json: {}, status: 200 
     Math,
     Date: DateImpl,
   };
-  const instrumented = `${source}\nmodule.exports = {\n  ClippingsGallery: module.exports,\n  GaleriaView,\n  FichaModal,\n  prepararInstagram,\n  Classificador,\n  Tradutor,\n  Receptor,\n  capaComRetentativa,\n  PADRAO,\n};`;
+  const instrumented = `${source}\nmodule.exports = {\n  ClippingsGallery: module.exports,\n  GaleriaView,\n  FichaModal,\n  prepararInstagram,\n  Classificador,\n  Tradutor,\n  AbaConfig,\n  Receptor,\n  capaComRetentativa,\n  ipBloqueado,\n  lookupSeguro,\n  fetchCapaProtegido,\n  PADRAO,\n};`;
   vm.runInNewContext(instrumented, sandbox, { filename: "main.js" });
-  return { internals: sandbox.module.exports, notices: FakeNotice.all, FakeElement, FakeImage, FakeClock };
+  return { internals: sandbox.module.exports, notices: FakeNotice.all, FakeElement, FakeImage, FakeClock, document };
 }
 
 function makePlugin(internals, app) {
@@ -425,7 +432,6 @@ function makePlugin(internals, app) {
     ...internals.PADRAO,
     pastas: ["Clippings"],
     colecoes: ["videos"],
-    modeloChave: "test-key",
     buscas: {},
   };
   plugin.aplicarPastas();

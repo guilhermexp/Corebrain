@@ -77,7 +77,7 @@ test("authenticated /instagram-saved route accepts the X batch envelope and enfo
   const { internals, notices } = loadMain();
   const { app, files } = makeApp([]);
   const plugin = makePlugin(internals, app);
-  plugin.cfg.ponteToken = "test-pairing-token";
+  plugin.ponteToken = "test-pairing-token";
   const receptor = new internals.Receptor(plugin);
   const payload = {
     pasta: "Clippings",
@@ -188,28 +188,23 @@ test("Instagram import persists oldest-first so the gallery keeps newest-first o
 
 test("untrusted Instagram image URLs are rejected before network access", async () => {
   const calls = [];
-  const { internals } = loadMain({ requestUrl: async (options) => {
-    calls.push(options.url);
-    return { status: 200, arrayBuffer: new Uint8Array(128).buffer, text: "" };
-  } });
+  const { internals } = loadMain();
   const { app } = makeApp([]);
   const plugin = makePlugin(internals, app);
+  plugin.baixarBytes = async (url) => { calls.push(url); return null; };
   const file = makeFile("Clippings/untrusted.md", {
     source: "https://www.instagram.com/p/Private_1/",
     image: "http://127.0.0.1/private.png",
   });
   plugin._instagramSavedPaths = new Set([file.path]);
 
-  assert.equal(await plugin.baixarCapa(file), "bloqueado");
+  assert.equal(await plugin.baixarCapa(file), "sem imagem");
   assert.deepEqual(calls, []);
 });
 
 test("metadata changes on an existing Instagram note do not queue or rewrite a cover", async () => {
   const calls = [];
-  const { internals } = loadMain({ requestUrl: async (options) => {
-    calls.push(options.url);
-    return { status: 200, arrayBuffer: new Uint8Array(128).buffer, text: "" };
-  } });
+  const { internals } = loadMain();
   const originalBody = "---\nsource: https://www.instagram.com/p/OldSaved_1/\nimage: https://scontent.cdninstagram.com/old.jpg\n---\nold note\n";
   const existing = makeFile("Clippings/old-ig.md", {
     source: "https://www.instagram.com/p/OldSaved_1/",
@@ -217,6 +212,8 @@ test("metadata changes on an existing Instagram note do not queue or rewrite a c
   }, originalBody);
   const { app } = makeApp([existing]);
   const plugin = makePlugin(internals, app);
+  plugin.baixarBytes = async (url) => { calls.push(url); return null; };
+  plugin.buscarCapa = async (url) => { calls.push(url); return ''; };
 
   await plugin.thumb(existing, { frontmatter: existing.frontmatter });
   assert.deepEqual(calls, []);
@@ -227,12 +224,10 @@ test("metadata changes on an existing Instagram note do not queue or rewrite a c
 
 test("disabled local covers are respected for newly imported Instagram notes", async () => {
   const calls = [];
-  const { internals } = loadMain({ requestUrl: async (options) => {
-    calls.push(options.url);
-    return { status: 200, arrayBuffer: new Uint8Array(128).buffer, text: "" };
-  } });
+  const { internals } = loadMain();
   const { app } = makeApp([]);
   const plugin = makePlugin(internals, app);
+  plugin.baixarBytes = async (url) => { calls.push(url); return null; };
   plugin.cfg.capaLocal = false;
   const receptor = new internals.Receptor(plugin);
   const image = "https://scontent.cdninstagram.com/v/t51/disabled.jpg";
@@ -257,6 +252,7 @@ test("a failed Instagram cover is a warning and never removes the successfully c
   const { app, files } = makeApp([]);
   const plugin = makePlugin(internals, app);
   const receptor = new internals.Receptor(plugin);
+  plugin.baixarBytes = async (url) => { calls.push(url); return null; };
   const image = "https://scontent.cdninstagram.com/v/t51/signed.jpg?token=expired";
 
   const result = await receptor._gravar([

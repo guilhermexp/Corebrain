@@ -1,6 +1,78 @@
-const { Plugin, ItemView, Notice, requestUrl, PluginSettingTab, Setting, setIcon, Modal } = require("obsidian");
+const { Plugin, ItemView, Notice, requestUrl, PluginSettingTab, Setting, setIcon, Modal, parseYaml } = require("obsidian");
 const http = require("http");
-const { randomBytes, timingSafeEqual } = require("crypto");
+const https = require("https");
+const dns = require("dns");
+const net = require("net");
+const { randomBytes, timingSafeEqual, createHmac } = require("crypto");
+
+function ipBloqueado(ip) {
+  const familia = net.isIP(ip);
+  if (familia === 4) {
+    const [a, b] = ip.split(".").map(Number);
+    return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) || a >= 224;
+  }
+  if (familia !== 6) return true;
+  let endereco = ip.toLowerCase().split("%")[0];
+  const ipv4 = endereco.match(/(?:^|:)(\d+\.\d+\.\d+\.\d+)$/);
+  if (ipv4) {
+    const octetos = ipv4[1].split(".").map(Number);
+    endereco = endereco.slice(0, -ipv4[1].length) + ((octetos[0] << 8) | octetos[1]).toString(16) + ":" + ((octetos[2] << 8) | octetos[3]).toString(16);
+  }
+  const partes = endereco.split("::");
+  const inicio = partes[0] ? partes[0].split(":") : [];
+  const fim = partes[1] ? partes[1].split(":") : [];
+  const grupos = partes.length === 2 ? [...inicio, ...Array(8 - inicio.length - fim.length).fill("0"), ...fim] : inicio;
+  const g = grupos.map((v) => parseInt(v, 16));
+  if (g.slice(0, 5).every((n) => n === 0) && g[5] === 0xffff) {
+    return ipBloqueado(`${g[6] >> 8}.${g[6] & 255}.${g[7] >> 8}.${g[7] & 255}`);
+  }
+  return g.every((n) => n === 0) || (g.slice(0, 7).every((n) => n === 0) && g[7] === 1) ||
+    (g[0] & 0xfe00) === 0xfc00 || (g[0] & 0xffc0) === 0xfe80 || (g[0] & 0xff00) === 0xff00;
+}
+
+function lookupSeguro(hostname, options, callback) {
+  dns.lookup(hostname, { ...options, all: true }, (erro, enderecos) => {
+    if (erro) return callback(erro);
+    if (!enderecos.length || enderecos.some((e) => ipBloqueado(e.address))) return callback(new Error("destino bloqueado"));
+    if (options.all) return callback(null, enderecos);
+    callback(null, enderecos[0].address, enderecos[0].family);
+  });
+}
+
+async function fetchCapaProtegido(bruto, limite) {
+  let url = new URL(bruto);
+  for (let redirects = 0; redirects <= 5; redirects++) {
+    if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("esquema bloqueado");
+    const host = url.hostname.replace(/^\[|\]$/g, "");
+    if (net.isIP(host) && ipBloqueado(host)) throw new Error("destino bloqueado");
+    const resposta = await new Promise((resolve, reject) => {
+      const transporte = url.protocol === "https:" ? https : http;
+      const req = transporte.request(url, { lookup: lookupSeguro, agent: false }, (res) => {
+        const chunks = [];
+        let tamanho = 0;
+        res.on("data", (chunk) => {
+          tamanho += chunk.length;
+          if (tamanho > limite) req.destroy(new Error("resposta grande demais"));
+          else chunks.push(chunk);
+        });
+        res.on("error", reject);
+        res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, dados: Buffer.concat(chunks) }));
+      });
+      const timer = setTimeout(() => req.destroy(new Error("timeout")), 15000);
+      req.on("close", () => clearTimeout(timer));
+      req.on("error", reject);
+      req.end();
+    });
+    if ([301, 302, 303, 307, 308].includes(resposta.status) && resposta.headers.location) {
+      if (redirects === 5) throw new Error("redirecionamentos demais");
+      url = new URL(resposta.headers.location, url);
+      continue;
+    }
+    return { ...resposta, url: url.href };
+  }
+}
 
 // ponytail: caminhos fixos. Se um dia precisar de mais de uma galeria, ai sim vira setting.
 /**
@@ -13,9 +85,6 @@ const PADRAO = {
   pastas: ["Clippings"],
   pastaBookmarks: "Clippings",
   porta: 27125,
-  // Token local da instalacao. Nunca vai em URL nem em logs; a extensao o
-  // envia somente no header Authorization da ponte loopback.
-  ponteToken: "",
   coluna: 300,
   linha: 210,
   ordem: "recente",
@@ -36,8 +105,10 @@ const PADRAO = {
   capaLocal: true,
   modeloUrl: "https://api.kimi.com/coding/v1/chat/completions",
   modeloNome: "k3",
-  modeloChave: "",
 };
+
+const SEGREDO_PONTE = "corebrain-ponte-token";
+const SEGREDO_MODELO = "corebrain-modelo-chave";
 
 // imagens dentro da nota, pro carrossel
 const MD_IMG = /!\[[^\]]*\]\((\S+?)\)/g;
@@ -1091,9 +1162,14 @@ class GaleriaView extends ItemView {
       await this.plugin.adicionarLink(url);
     });
     // clicar fora fecha, senao a caixa fica aberta atras do conteudo
-    this.registerDomEvent(document, "click", (e) => {
-      if (fab.hasClass("cg-fab-aberto") && !fab.contains(e.target)) abrir(false);
-    });
+    this._fabAtual = { fab, abrir };
+    if (!this._fabListenerRegistrado) {
+      this._fabListenerRegistrado = true;
+      this.registerDomEvent(document, "click", (e) => {
+        const atual = this._fabAtual;
+        if (atual?.fab.hasClass("cg-fab-aberto") && !atual.fab.contains(e.target)) atual.abrir(false);
+      });
+    }
   }
 
   /** Arrastar um link de qualquer lugar pra cima da galeria. */
@@ -1423,13 +1499,13 @@ function origemPermitida(origin) {
   try {
     const u = new URL(origin);
     if (!u.hostname || (u.pathname !== "" && u.pathname !== "/") || u.search || u.hash) return false;
-    return u.protocol === "chrome-extension:" || u.protocol === "moz-extension:";
+    return u.protocol === "chrome-extension:" || u.protocol === "moz-extension:" || u.protocol === "safari-web-extension:";
   } catch {
     return false;
   }
 }
 
-const PROTOCOLO_PONTE = 1;
+const PROTOCOLO_PONTE = 2;
 const MAX_CORPO_PONTE = 80 * 1024 * 1024;
 const MAX_CONTEUDO_CLIP = 16 * 1024 * 1024;
 const MAX_BOOKMARKS = 10000;
@@ -1473,33 +1549,13 @@ function fontesDoYaml(conteudo) {
   const texto = String(conteudo || "");
   const fm = texto.match(/^---\s*\r?\n([\s\S]*?)\r?\n---(?:\s|$)/);
   if (!fm) return [];
-  const linhas = fm[1].split(/\r?\n/);
-  const indice = linhas.findIndex((linha) => /^\s*source\s*:/.test(linha));
-  if (indice < 0) return [];
-  let valor = linhas[indice].replace(/^\s*source\s*:\s*/, "").trim();
-  const valores = [];
-  if (!valor) {
-    for (let i = indice + 1; i < linhas.length; i++) {
-      const item = linhas[i].match(/^\s*-\s*(.*?)\s*$/);
-      if (!item) break;
-      valores.push(item[1]);
-    }
-  } else if (valor.startsWith("[") && valor.endsWith("]")) {
-    try {
-      const parsed = JSON.parse(valor);
-      if (Array.isArray(parsed)) valores.push(...parsed);
-    } catch {
-      valores.push(...valor.slice(1, -1).split(","));
-    }
-  } else {
-    valores.push(valor);
+  try {
+    const fmObj = parseYaml(fm[1]);
+    if (!fmObj || typeof fmObj !== "object" || Array.isArray(fmObj)) return [];
+    return fontesDoFrontmatter(fmObj.source);
+  } catch {
+    return [];
   }
-  return valores.map((v) => {
-    let item = String(v || "").trim();
-    if ((item.startsWith('"') && item.endsWith('"')) || (item.startsWith("'") && item.endsWith("'"))) item = item.slice(1, -1);
-    if (item.startsWith("<") && item.endsWith(">")) item = item.slice(1, -1);
-    return normalizarSource(item);
-  }).filter(Boolean);
 }
 
 function fonteDoYaml(conteudo) {
@@ -1746,6 +1802,17 @@ function sanitizar(nome) {
     .slice(0, 120);
 }
 
+function nomeArquivoPonte(nome) {
+  let base = sanitizar(nome);
+  if (!base || /^[.\s]+$/.test(base)) {
+    const data = new Date();
+    const dois = (n) => String(n).padStart(2, "0");
+    base = `Clipping ${data.getFullYear()}-${dois(data.getMonth() + 1)}-${dois(data.getDate())} ${dois(data.getHours())}${dois(data.getMinutes())}${dois(data.getSeconds())}`;
+  }
+  base = base.replace(/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?= *(?:\.|$))/i, "$1 _");
+  return base;
+}
+
 /**
  * Overlay do clique no card: capa grande a esquerda, ficha a direita.
  * Antes o clique abria a nota numa aba nova — ver uma imagem virava trocar de
@@ -1901,7 +1968,7 @@ class Receptor {
   autorizado(req) {
     const cabecalho = req.headers.authorization;
     const m = typeof cabecalho === "string" ? cabecalho.match(/^Bearer\s+(.+)$/i) : null;
-    return !!m && tokenValido(m[1], this.plugin.cfg.ponteToken);
+    return !!m && tokenValido(m[1], this.plugin.ponteToken);
   }
 
   tratar(req, res) {
@@ -1922,7 +1989,6 @@ class Receptor {
     if (origin !== undefined && !origemPermitida(origin)) {
       return this.responder(res, 403, { erro: "origem nao permitida" }, origin);
     }
-    if (!this.autorizado(req)) return this.responder(res, 401, { erro: "nao autorizado" }, origin);
 
     let url;
     try {
@@ -1930,6 +1996,17 @@ class Receptor {
     } catch {
       return this.responder(res, 400, { erro: "url invalida" }, origin);
     }
+
+    if (req.method === "GET" && url.pathname === "/prova") {
+      const nonce = url.searchParams.get("nonce");
+      if (!nonce || !/^[0-9a-f]{64}$/.test(nonce)) {
+        return this.responder(res, 400, { erro: "nonce invalido" }, origin);
+      }
+      const prova = createHmac("sha256", this.plugin.ponteToken)
+        .update("corebrain-ponte-prova:v1:" + nonce).digest("hex");
+      return this.responder(res, 200, { plugin: "clippings-gallery", protocol: PROTOCOLO_PONTE, prova }, origin);
+    }
+    if (!this.autorizado(req)) return this.responder(res, 401, { erro: "nao autorizado" }, origin);
 
     if (req.method === "GET" && url.pathname === "/ping") {
       return this.responder(res, 200, {
@@ -2046,11 +2123,13 @@ class Receptor {
     if (jaTem) return { ok: true, duplicata: true, caminho: jaTem.path };
 
     if (!vault.getAbstractFileByPath(dir)) await vault.createFolder(dir).catch(() => {});
-    const base = sanitizar(nome);
+    const base = nomeArquivoPonte(nome);
     let caminho = `${dir}/${base}.md`;
     for (let i = 2; vault.getAbstractFileByPath(caminho); i++) caminho = `${dir}/${base} (${i}).md`;
 
     const file = await vault.create(caminho, conteudo);
+    this.plugin._notasNovas ||= new Set();
+    this.plugin._notasNovas.add(file.path);
     await this.plugin.registrarChegada?.(file);
     this.plugin.app.workspace.getLeavesOfType(VIEW).forEach((l) => l.view.render?.());
     return { ok: true, duplicata: false, caminho };
@@ -2073,6 +2152,7 @@ class Receptor {
     const vault = this.plugin.app.vault;
 
     if (!vault.getAbstractFileByPath(dir)) await vault.createFolder(dir).catch(() => {});
+    if (origem === "X") await this.plugin.recuperarCarimbosPendentes?.();
 
     // Indice unico por identidade da fonte; URLs X com @handles diferentes
     // ainda representam o mesmo post. A URL original nunca e regravada.
@@ -2129,7 +2209,7 @@ class Receptor {
       if (selecionados.has(i)) {
         let arquivoCriado = null;
         try {
-          const caminho = caminhoLivre(sanitizar(b.nome));
+          const caminho = caminhoLivre(nomeArquivoPonte(b.nome));
           arquivoCriado = await vault.create(caminho, b.conteudo);
           if (eInstagram) {
             this.plugin._instagramSavedPaths ||= new Set();
@@ -2140,6 +2220,12 @@ class Receptor {
           criados++;
         } catch (e) {
           erros++;
+          if (!eInstagram && arquivoCriado) {
+            const pendentes = this.plugin.cfg.carimbosPendentes || [];
+            if (!pendentes.includes(arquivoCriado.path)) {
+              await this.plugin.salvar({ carimbosPendentes: [...pendentes, arquivoCriado.path] });
+            }
+          }
         } finally {
           // Covers ficam fora do tempo de resposta da ponte; falha de imagem
           // nunca transforma uma nota criada em erro nem apaga dados.
@@ -2197,7 +2283,7 @@ class Classificador {
     const r = await requestUrl({
       url: cfg.modeloUrl,
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.modeloChave}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.plugin.app.secretStorage.getSecret(SEGREDO_MODELO) || ""}` },
       body: JSON.stringify({
         model: cfg.modeloNome,
         stream: false,
@@ -2223,7 +2309,7 @@ class Classificador {
   /** `limite` serve pra testar num punhado antes de soltar em milhares. */
   async rodar(limite) {
     const cfg = this.plugin.cfg;
-    if (!cfg.modeloChave) {
+    if (!this.plugin.app.secretStorage.getSecret(SEGREDO_MODELO)) {
       new Notice("Configure a chave do modelo nas opcoes do plugin.", 6000);
       return;
     }
@@ -2310,7 +2396,7 @@ class Tradutor {
     const r = await requestUrl({
       url: cfg.modeloUrl,
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.modeloChave}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.plugin.app.secretStorage.getSecret(SEGREDO_MODELO) || ""}` },
       body: JSON.stringify({
         model: cfg.modeloNome,
         stream: false,
@@ -2326,7 +2412,7 @@ class Tradutor {
   /** `limite` serve pra conferir num punhado antes de soltar em milhares. */
   async rodar(limite) {
     const cfg = this.plugin.cfg;
-    if (!cfg.modeloChave) {
+    if (!this.plugin.app.secretStorage.getSecret(SEGREDO_MODELO)) {
       new Notice("Configure a chave do modelo nas opcoes do plugin.", 6000);
       return;
     }
@@ -2442,7 +2528,7 @@ class AbaConfig extends PluginSettingTab {
       .setName("Token de pareamento")
       .setDesc("Cole este token nas configuracoes da extensao. Ele autoriza somente esta instalacao local.")
       .addText((t) => {
-        t.setValue(String(this.plugin.cfg.ponteToken || ""));
+        t.setValue(String(this.plugin.ponteToken || ""));
         t.inputEl.type = "password";
         t.inputEl.readOnly = true;
         t.inputEl.setAttribute("autocomplete", "off");
@@ -2460,7 +2546,7 @@ class AbaConfig extends PluginSettingTab {
       .addButton((b) =>
         b.setButtonText("Copiar").onClick(async () => {
           try {
-            await navigator.clipboard.writeText(String(this.plugin.cfg.ponteToken || ""));
+            await navigator.clipboard.writeText(String(this.plugin.ponteToken || ""));
             new Notice("Token copiado.", 3000);
           } catch {
             new Notice("Nao foi possivel copiar o token.", 4000);
@@ -2470,7 +2556,7 @@ class AbaConfig extends PluginSettingTab {
       .addButton((b) =>
         b.setButtonText("Gerar novo token").setWarning().onClick(async () => {
           const token = randomBytes(32).toString("hex");
-          await this.plugin.salvar({ ponteToken: token });
+          this.plugin.definirTokenPonte(token);
           new Notice("Novo token gerado; atualize a extensao.", 5000);
           this.display();
         }),
@@ -2492,11 +2578,11 @@ class AbaConfig extends PluginSettingTab {
 
     new Setting(c)
       .setName("Chave da API")
-      .setDesc("Fica no data.json do plugin, dentro do seu vault.")
+      .setDesc("Guardada na SecretStorage do Obsidian, fora do vault.")
       .addText((t) => {
         t.inputEl.type = "password";
-        t.setValue(this.plugin.cfg.modeloChave || "").onChange(async (v) =>
-          this.plugin.salvar({ modeloChave: v.trim() }),
+        t.setValue(this.plugin.app.secretStorage.getSecret(SEGREDO_MODELO) || "").onChange(async (v) =>
+          this.plugin.app.secretStorage.setSecret(SEGREDO_MODELO, v.trim()),
         );
       });
 
@@ -2588,14 +2674,28 @@ class AbaConfig extends PluginSettingTab {
 }
 
 class ClippingsGallery extends Plugin {
+  definirTokenPonte(token) {
+    this.app.secretStorage.setSecret(SEGREDO_PONTE, token);
+    if (this.app.secretStorage.getSecret(SEGREDO_PONTE) !== token) throw new Error("Falha ao gravar token da ponte");
+    this.ponteToken = token;
+  }
+
   async onload() {
-    this.cfg = Object.assign({}, PADRAO, await this.loadData());
-    // Pairing is installation-specific. Generate once on first run and keep it
-    // in the plugin data; never print or put it in a URL.
-    if (typeof this.cfg.ponteToken !== "string" || !this.cfg.ponteToken.trim()) {
-      this.cfg.ponteToken = randomBytes(32).toString("hex");
-      await this.saveData(this.cfg);
+    const dados = await this.loadData() || {};
+    const storage = this.app.secretStorage;
+    for (const [campo, id] of [["ponteToken", SEGREDO_PONTE], ["modeloChave", SEGREDO_MODELO]]) {
+      const antigo = dados[campo];
+      if (typeof antigo === "string" && antigo) {
+        if (!storage.getSecret(id)) storage.setSecret(id, antigo);
+        if (storage.getSecret(id) !== antigo) throw new Error(`Falha ao migrar segredo ${campo}`);
+      }
     }
+    this.cfg = Object.assign({}, PADRAO, dados);
+    delete this.cfg.ponteToken;
+    delete this.cfg.modeloChave;
+    if ("ponteToken" in dados || "modeloChave" in dados) await this.saveData(this.cfg);
+    this.ponteToken = storage.getSecret(SEGREDO_PONTE);
+    if (!this.ponteToken) this.definirTokenPonte(randomBytes(32).toString("hex"));
     this.aplicarPastas();
     // A normal obsidian:// URI can create a note without the clipper. Observe
     // genuine vault creations as the fallback, but never rewrite files while
@@ -2605,14 +2705,21 @@ class ClippingsGallery extends Plugin {
     this._chegadaPronta = false;
     this.registerEvent(this.app.vault.on("create", (file) => {
       if (!this._chegadaPronta || !file?.path || this._chegadaInicial.get(file.path) === file) return;
+      this._notasNovas ||= new Set();
+      this._notasNovas.add(file.path);
       void this.registrarChegada(file);
     }));
     this.registerEvent(this.app.vault.on("delete", (file) => {
-      if (file?.path) this._chegadaInicial.delete(file.path);
+      if (file?.path) {
+        this._chegadaInicial.delete(file.path);
+        this._notasNovas?.delete(file.path);
+        this._instagramSavedPaths?.delete(file.path);
+      }
     }));
     const chegadaAposLayout = () => {
       this._chegadaInicial = new Map((this.app.vault.getMarkdownFiles?.() || []).map((f) => [f.path, f]));
       this._chegadaPronta = true;
+      void this.recuperarCarimbosPendentes();
     };
     if (typeof this.app.workspace.onLayoutReady === "function") this.app.workspace.onLayoutReady(chegadaAposLayout);
     else chegadaAposLayout();
@@ -2632,6 +2739,11 @@ class ClippingsGallery extends Plugin {
     this.receptor.iniciar();
     this.completarCapasDeFundo();
     this.register(() => this.receptor.parar());
+    this.register(() => {
+      this._encerrando = true;
+      if (this._instagramCoverQueue) this._instagramCoverQueue.length = 0;
+      this._instagramCoverQueued?.clear();
+    });
 
     this.addSettingTab(new AbaConfig(this.app, this));
     this.addCommand({
@@ -2672,6 +2784,36 @@ class ClippingsGallery extends Plugin {
     // Buscas salvas guardam caminhos concretos, entao acompanham renomeacoes
     // para nao virarem uma lista silenciosamente vazia.
     this.registerEvent(this.app.vault.on("rename", (f, antigo) => this.atualizarBuscasRenomeada(f, antigo)));
+    this.instalarRetencaoJanela();
+  }
+
+  instalarRetencaoJanela() {
+    if (process.platform !== "darwin") return;
+    const remote = require("@electron/remote");
+    const win = remote.getCurrentWindow();
+    if (!win || !Number.isInteger(win.id)) throw new Error("janela atual indisponivel");
+    const dir = this.diretorioDoPlugin();
+    if (!dir) throw new Error("diretorio do plugin indisponivel");
+    const arquivo = require("path").join(dir, "window-lifecycle.js");
+    if (!require("path").isAbsolute(arquivo)) throw new Error("caminho do ciclo de vida nao e absoluto");
+    const ciclo = remote.require(arquivo);
+    if (!ciclo || typeof ciclo.retain !== "function" || typeof ciclo.release !== "function") {
+      throw new Error("modulo de ciclo de vida da janela invalido");
+    }
+    const dono = randomBytes(8).toString("hex");
+    ciclo.retain(dono, win.id);
+    this.register(() => ciclo.release(dono));
+  }
+
+  diretorioDoPlugin() {
+    const path = require("path");
+    const base = this.app?.vault?.adapter?.basePath || this.app?.vault?.adapter?.getBasePath?.();
+    const informado = this.manifest?.dir;
+    if (informado && path.isAbsolute(informado)) return informado;
+    if (base && informado) return path.resolve(base, informado);
+    const id = this.manifest?.id;
+    if (!base || !id) return "";
+    return path.join(base, this.app.vault.configDir || ".obsidian", "plugins", id);
   }
 
   /** Add an immutable arrival timestamp to one newly-created gallery note.
@@ -2722,6 +2864,18 @@ class ClippingsGallery extends Plugin {
       return mudou;
     }
     throw new Error("fileManager.processFrontMatter indisponivel para registrar chegada");
+  }
+
+  async recuperarCarimbosPendentes() {
+    for (const caminho of [...(this.cfg.carimbosPendentes || [])]) {
+      const file = this.app.vault.getAbstractFileByPath(caminho);
+      try {
+        if (file) await this.registrarChegada(file, true);
+        await this.salvar({ carimbosPendentes: (this.cfg.carimbosPendentes || []).filter((p) => p !== caminho) });
+      } catch (e) {
+        console.error("clippings-gallery: carimbo pendente", caminho, e);
+      }
+    }
   }
 
   /** Normaliza: aceita "Clippings" ou "Clippings/" e ignora linha vazia. */
@@ -2979,6 +3133,8 @@ class ClippingsGallery extends Plugin {
       for (let i = 2; this.app.vault.getAbstractFileByPath(caminho); i++) caminho = `${pasta}/${nome} (${i}).md`;
 
       const file = await this.app.vault.create(caminho, conteudo);
+      this._notasNovas ||= new Set();
+      this._notasNovas.add(file.path);
       await this.registrarChegada(file);
       aviso?.hide();
       diga(og.titulo ? `Adicionado: ${og.titulo.slice(0, 60)}` : "Link adicionado.", 5000);
@@ -3019,16 +3175,15 @@ class ClippingsGallery extends Plugin {
 
     // a URL guardada pode estar morta (Instagram): busca uma nova a partir do post
     let url = String(fm.image || "");
-    const instagramImportado = this._instagramSavedPaths?.has(file.path);
-    // Nunca busque a pagina do post como fallback para notas do Instagram: alem
-    // de nao ser confiavel para OG, isso faria um import sem imagem virar uma
-    // requisicao ao dominio da origem. Para Instagram, so o CDN allowlistado.
-    if (instagramImportado && (!imagemInstagramPermitida(url) || CAPA_GENERICA.test(url))) {
-      return url || fm.source ? "bloqueado" : "sem imagem";
-    }
+    const instagramImportado = urlInstagram(fm.source) || this._instagramSavedPaths?.has(file.path);
+    if (this._encerrando) return "falhou";
+    if (instagramImportado && CAPA_GENERICA.test(url)) return "bloqueado";
+    if (instagramImportado && !imagemInstagramPermitida(url)) return "sem imagem";
     let bytes = CAPA_GENERICA.test(url) ? null : await this.baixarBytes(url);
+    if (this._encerrando) return "falhou";
     if (!instagramImportado && !bytes && fm.source) {
       const nova = await this.buscarCapa(normalizarSource(fm.source));
+      if (this._encerrando) return "falhou";
       if (nova && nova !== url) {
         url = nova;
         bytes = await this.baixarBytes(url);
@@ -3037,13 +3192,17 @@ class ClippingsGallery extends Plugin {
     if (CAPA_GENERICA.test(url)) return "bloqueado"; // icone do app, nao o post
     if (!bytes) return url || fm.source ? "falhou" : "sem imagem";
 
-    const { dados, ext } = await this.encolher(bytes, extDaUrl(url));
+    const reduzida = await this.encolher(bytes, extDaUrl(url));
+    if (!reduzida || this._encerrando) return "falhou";
+    const { dados, ext } = reduzida;
     const pasta = this.cfg.pastaCapas || PADRAO.pastaCapas;
     if (!this.app.vault.getAbstractFileByPath(pasta)) await this.app.vault.createFolder(pasta).catch(() => {});
+    if (this._encerrando) return "falhou";
     const caminho = `${pasta}/${nomeDeCapa(fm.source || url, ext)}`;
     if (!this.app.vault.getAbstractFileByPath(caminho)) {
       await this.app.vault.createBinary(caminho, dados);
     }
+    if (this._encerrando) return "falhou";
     await this.app.fileManager.processFrontMatter(file, (f) => {
       f.thumb = caminho;
     });
@@ -3055,9 +3214,12 @@ class ClippingsGallery extends Plugin {
   async baixarBytes(url, tentativas = 3) {
     if (!/^https?:\/\//i.test(String(url || ""))) return null;
     for (let n = 0; n <= tentativas; n++) {
+      if (this._encerrando) return null;
       try {
-        const r = await requestUrl({ url, throw: false });
-        if (r.status === 200 && r.arrayBuffer && r.arrayBuffer.byteLength >= 100) return r.arrayBuffer;
+        const r = await fetchCapaProtegido(url, 20 * 1024 * 1024);
+        if (r.status === 200 && r.dados.byteLength) {
+          return r.dados.buffer.slice(r.dados.byteOffset, r.dados.byteOffset + r.dados.byteLength);
+        }
         if (r.status !== 429) return null;
       } catch {
         return null;
@@ -3077,7 +3239,8 @@ class ClippingsGallery extends Plugin {
    */
   async encolher(bytes, ext) {
     const largura = this.cfg.larguraCapa || PADRAO.larguraCapa;
-    if (ext === "gif") return { dados: bytes, ext };
+    const assinatura = Buffer.from(bytes).subarray(0, 6).toString("ascii");
+    if (assinatura === "GIF87a" || assinatura === "GIF89a") return { dados: bytes, ext: "gif" };
     try {
       const bmp = await createImageBitmap(new Blob([bytes]));
       if (bmp.width <= largura) return { dados: bytes, ext };
@@ -3086,7 +3249,7 @@ class ClippingsGallery extends Plugin {
       const blob = await cv.convertToBlob({ type: "image/jpeg", quality: 0.82 });
       return { dados: await blob.arrayBuffer(), ext: "jpg" };
     } catch {
-      return { dados: bytes, ext }; // formato que o canvas nao abre: guarda cru
+      return null;
     }
   }
 
@@ -3102,7 +3265,9 @@ class ClippingsGallery extends Plugin {
   }
 
   /** Atualiza caminhos exatos (e descendentes, quando uma pasta e renomeada)
-   *  nas buscas salvas. O evento de rename chega depois que `file.path` mudou. */
+   *  nas buscas salvas e nos carimbos de chegada pendentes. O evento chega
+   *  depois que `file.path` mudou. O prefixo exige barra, entao Pasta nao casa
+   *  PastaExtra. */
   async atualizarBuscasRenomeada(file, antigo) {
     const velho = String(antigo || "").replace(/^\/+|\/+$/g, "");
     const novo = String(typeof file === "string" ? file : file?.path || "").replace(/^\/+|\/+$/g, "");
@@ -3129,10 +3294,27 @@ class ClippingsGallery extends Plugin {
         mudou = true;
       }
     }
-    if (!mudou) return false;
-    await this.salvar({ buscas });
-    this._buscaCache = null;
-    this.app.workspace.getLeavesOfType(VIEW).forEach((l) => l.view.render?.());
+    const prefixo = `${velho}/`;
+    const pendentes = Array.isArray(this.cfg.carimbosPendentes) ? this.cfg.carimbosPendentes : null;
+    let carimbos = null;
+    if (pendentes) {
+      const remapeados = pendentes.map((item) => {
+        const caminho = String(item);
+        if (caminho === velho) return novo;
+        if (caminho.startsWith(prefixo)) return `${novo}${caminho.slice(velho.length)}`;
+        return caminho;
+      });
+      if (remapeados.some((caminho, i) => caminho !== String(pendentes[i]))) carimbos = [...new Set(remapeados)];
+    }
+    if (!mudou && !carimbos) return false;
+    const mudanca = {};
+    if (mudou) mudanca.buscas = buscas;
+    if (carimbos) mudanca.carimbosPendentes = carimbos;
+    await this.salvar(mudanca);
+    if (mudou) {
+      this._buscaCache = null;
+      this.app.workspace.getLeavesOfType(VIEW).forEach((l) => l.view.render?.());
+    }
     return true;
   }
 
@@ -3199,6 +3381,8 @@ class ClippingsGallery extends Plugin {
   async salvar(mudanca) {
     const portaAnterior = this.cfg.porta;
     Object.assign(this.cfg, mudanca);
+    delete this.cfg.ponteToken;
+    delete this.cfg.modeloChave;
     this.aplicarPastas();
     await this.saveData(this.cfg);
     if (mudanca && Object.prototype.hasOwnProperty.call(mudanca, "porta") && portaAnterior !== this.cfg.porta && this.receptor) {
@@ -3233,7 +3417,7 @@ class ClippingsGallery extends Plugin {
     const temCopia = fm.thumb && this.app.vault.getAbstractFileByPath(String(fm.thumb));
     if (fm.image && temCopia) return; // ja tem capa e copia local
     if (urlInstagram(fm.source)) {
-      if (this._instagramSavedPaths?.has(file.path)) {
+      if (this._instagramSavedPaths?.has(file.path) || this._notasNovas?.has(file.path)) {
         // O import traz a imagem do feed. Nao tente OG no post logado (nem aceite
         // URLs arbitrarias como image); downloads rodam fora do request e em fila.
         if (this.cfg.capaLocal !== false && imagemInstagramPermitida(fm.image) && !CAPA_GENERICA.test(fm.image)) {
@@ -3275,8 +3459,8 @@ class ClippingsGallery extends Plugin {
   enfileirarCapaInstagram(file) {
     const caminho = String(file?.path || "");
     const fm = this.app.metadataCache.getFileCache(file)?.frontmatter || {};
-    if (this.cfg.capaLocal === false || !caminho || !this._instagramSavedPaths?.has(caminho) ||
-      !imagemInstagramPermitida(fm.image) ||
+    if (this._encerrando || this.cfg.capaLocal === false || !caminho ||
+      !(this._instagramSavedPaths?.has(caminho) || this._notasNovas?.has(caminho)) || !imagemInstagramPermitida(fm.image) ||
       CAPA_GENERICA.test(String(fm.image || ""))) return;
     this._instagramCoverQueue ||= [];
     this._instagramCoverQueued ||= new Set();
@@ -3290,7 +3474,7 @@ class ClippingsGallery extends Plugin {
     const drenar = async () => {
       let falhas = 0;
       try {
-        while (this._instagramCoverQueue.length) {
+        while (!this._encerrando && this._instagramCoverQueue.length) {
           const proximo = this._instagramCoverQueue.shift();
           try {
             const resultado = await this.baixarCapa(proximo);
@@ -3308,7 +3492,7 @@ class ClippingsGallery extends Plugin {
         this._instagramCoverDrain = null;
         // Uma nota pode entrar enquanto a fila termina, sem deixar trabalho
         // pendurado ate a proxima mudanca de metadata.
-        if (this._instagramCoverQueue.length) this._iniciarFilaCapasInstagram();
+        if (!this._encerrando && this._instagramCoverQueue.length) this._iniciarFilaCapasInstagram();
       }
     };
     this._iniciarFilaCapasInstagram = () => {
@@ -3338,21 +3522,23 @@ class ClippingsGallery extends Plugin {
     // no proximo load tenta de novo, caso o site tenha saido do ar na hora.
     this.capasSemJeito = new Set();
     let espera = 5000;
+    let proximo = 0;
     const passo = async () => {
       if (this.parandoDeFundo) return;
       const faltam = this.semCopiaLocal().filter((f) => !this.capasSemJeito.has(f.path));
       if (!faltam.length) return; // nada a fazer: para de reagendar
       let ok = 0;
-      for (const f of faltam.slice(0, 25)) {
+      const inicio = proximo % faltam.length;
+      const quantidade = Math.min(25, faltam.length);
+      proximo = (inicio + quantidade) % faltam.length;
+      for (let i = 0; i < quantidade; i++) {
+        const f = faltam[(inicio + i) % faltam.length];
         if (this.parandoDeFundo) return;
         try {
           const r = await this.baixarCapa(f);
           if (r === "ok") ok++;
-          // "bloqueado" fica de fora: o site esta recusando AGORA, mas volta.
-          // Marcar como sem jeito congelaria a capa por toda a sessao.
-          else if (r === "falhou" || r === "sem imagem") this.capasSemJeito.add(f.path);
+          else if (r === "bloqueado" || r === "sem imagem") this.capasSemJeito.add(f.path);
         } catch (e) {
-          this.capasSemJeito.add(f.path);
           console.error("clippings-gallery: capa de fundo falhou em", f.path, e);
         }
         await new Promise((s) => setTimeout(s, 250)); // sem rajada: 429 e o inimigo
@@ -3442,8 +3628,10 @@ class ClippingsGallery extends Plugin {
       }
       if (/^[A-Za-z0-9_-]{11}$/.test(id)) return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
     } catch { /* Preserve existing handling for non-URL inputs. */ }
-    const { imagem } = lerOg((await requestUrl({ url })).text);
-    return imagem ? new URL(imagem, url).href : ""; // resolve caminho relativo
+    const r = await fetchCapaProtegido(url, 5 * 1024 * 1024);
+    if (r.status !== 200) return "";
+    const { imagem } = lerOg(r.dados.toString("utf8"));
+    return imagem ? new URL(imagem, r.url).href : ""; // resolve caminho relativo
   }
 
   /** Notas da galeria com source e sem imagem. */

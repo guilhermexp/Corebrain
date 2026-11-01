@@ -89,6 +89,17 @@ test("a bookmark with missing cached source metadata is still deduplicated from 
   assert.equal(files.length, 1);
 });
 
+test("P6 YAML source with a comment is deduplicated", async () => {
+  const { internals } = loadMain();
+  const existing = makeFile("Clippings/commented.md", {}, '---\nsource: "https://example.com/page" # original URL\n---\nbody');
+  const { app, files } = makeApp([existing]);
+  const result = await new internals.Receptor(makePlugin(internals, app))._gravarClip({
+    nome: "duplicate", conteudo: '---\nsource: "https://example.com/page"\n---\nbody',
+  });
+  assert.equal(result.duplicata, true);
+  assert.equal(files.length, 1);
+});
+
 test("partial source overlap never offers a note for destructive duplicate cleanup", async () => {
   for (const shared of ["https://example.com/a", "https://x.com/old/status/123"]) {
     const { internals, notices } = loadMain();

@@ -152,3 +152,104 @@ test("startup does not rewrite legacy notes, while a genuinely new vault create 
   await Promise.resolve();
   assertIso(recreated.frontmatter.corebrain_added_at);
 });
+
+test("P5 failed X arrival stamp is recovered on the next sync without rewriting legacy notes", async () => {
+  const { internals } = loadMain();
+  const legacy = makeFile("Clippings/legacy.md", { title: "Legacy" }, "---\ntitle: Legacy\n---\n");
+  const { app } = makeApp([legacy]);
+  const plugin = makePlugin(internals, app);
+  const original = app.fileManager.processFrontMatter;
+  let fail = true;
+  app.fileManager.processFrontMatter = async (file, fn) => {
+    if (file.path === "Clippings/Retry.md" && fail) { fail = false; throw new Error("disk error"); }
+    return original(file, fn);
+  };
+  const receptor = new internals.Receptor(plugin);
+  const source = "https://x.com/user/status/123";
+  const bookmarks = [{ nome: "Retry", source, conteudo: noteBody(source, "2026-01-01") }];
+  const first = await receptor._gravar(bookmarks, "Clippings");
+  assert.equal(first.criados, 0);
+  assert.equal(first.erros, 1);
+  const second = await receptor._gravar(bookmarks, "Clippings");
+  assert.equal(second.pulados, 1);
+  assertIso(app.vault.getAbstractFileByPath("Clippings/Retry.md").frontmatter.corebrain_added_at);
+  assert.equal(legacy.frontmatter.corebrain_added_at, undefined);
+});
+
+test("P5 startup retries only persisted pending arrivals", async () => {
+  const { internals } = loadMain();
+  const pending = makeFile("Clippings/pending.md", {}, "---\nsource: https://example.com/pending\n---\n");
+  const legacy = makeFile("Clippings/legacy.md", {}, "---\nsource: https://example.com/legacy\n---\n");
+  const { app } = makeApp([pending, legacy]);
+  const plugin = makePlugin(internals, app);
+  plugin.loadData = async () => ({ capaLocal: false, carimbosPendentes: [pending.path] });
+  await plugin.onload();
+  app.workspace.emitLayoutReady();
+  await new Promise((resolve) => setImmediate(resolve));
+  assertIso(pending.frontmatter.corebrain_added_at);
+  assert.equal(legacy.frontmatter.corebrain_added_at, undefined);
+  assert.deepEqual([...plugin.cfg.carimbosPendentes], []);
+});
+
+test("failed arrival pending path follows a rename and is stamped on retry", async () => {
+  const { internals } = loadMain();
+  const { app, stored } = makeApp();
+  const plugin = makePlugin(internals, app);
+  let fail = true;
+  const original = app.fileManager.processFrontMatter;
+  app.fileManager.processFrontMatter = async (file, fn) => {
+    if (fail && file.path === "Clippings/Retry.md") {
+      fail = false;
+      throw new Error("disk error");
+    }
+    return original(file, fn);
+  };
+  await plugin.onload();
+  const receptor = new internals.Receptor(plugin);
+  const source = "https://x.com/user/status/rename-retry";
+  const bookmarks = [{ nome: "Retry", source, conteudo: noteBody(source, "2026-01-01") }];
+  const first = await receptor._gravar(bookmarks, "Clippings");
+  assert.equal(first.erros, 1);
+  assert.equal(plugin.cfg.carimbosPendentes?.length, 1);
+  assert.equal(plugin.cfg.carimbosPendentes[0], "Clippings/Retry.md");
+
+  const file = app.vault.getAbstractFileByPath("Clippings/Retry.md");
+  stored.delete(file.path);
+  file.path = "Clippings/Renamed.md";
+  stored.set(file.path, file);
+  app.vault.emit("rename", file, "Clippings/Retry.md");
+  for (let i = 0; i < 20 && plugin.cfg.carimbosPendentes[0] !== "Clippings/Renamed.md"; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  const second = await receptor._gravar(bookmarks, "Clippings");
+  assert.equal(second.pulados, 1);
+  assert.equal(second.criados, 0);
+  assertIso(app.vault.getAbstractFileByPath("Clippings/Renamed.md").frontmatter.corebrain_added_at);
+  assert.equal(app.vault.getAbstractFileByPath("Clippings/Retry.md"), null);
+  assert.deepEqual([...(plugin.cfg.carimbosPendentes || [])], []);
+});
+
+test("pending arrival remap does not treat a path prefix as a sibling folder", async () => {
+  const { internals } = loadMain();
+  const { app } = makeApp();
+  const plugin = makePlugin(internals, app);
+  plugin.cfg.carimbosPendentes = [
+    "Clippings/Pasta/nota.md",
+    "Clippings/PastaExtra/nota.md",
+    "Clippings/Pasta.md",
+  ];
+  plugin.cfg.buscas = {
+    leitura: { pedido: "leitura", criada: "2026-09-18", caminhos: ["Clippings/other.md"] },
+  };
+
+  const changed = await plugin.atualizarBuscasRenomeada({ path: "Clippings/Nova" }, "Clippings/Pasta");
+
+  assert.equal(changed, true);
+  assert.deepEqual([...plugin.cfg.carimbosPendentes], [
+    "Clippings/Nova/nota.md",
+    "Clippings/PastaExtra/nota.md",
+    "Clippings/Pasta.md",
+  ]);
+  assert.deepEqual([...plugin.cfg.buscas.leitura.caminhos], ["Clippings/other.md"]);
+});

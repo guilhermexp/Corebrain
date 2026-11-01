@@ -4,7 +4,7 @@ const { loadMain, makeApp, makePlugin } = require('./plugin-harness.cjs');
 
 test('YouTube covers do not depend on the rate-limited watch page', async () => {
   let requests = 0;
-  const { internals } = loadMain({ requestUrl: async () => { requests++; throw new Error('429'); } });
+  const { internals } = loadMain({ httpsModule: { request: () => { requests++; throw new Error('unexpected request'); } } });
   const plugin = makePlugin(internals, makeApp([]).app);
   for (const url of [
     'https://www.youtube.com/watch?v=tTnUcSj-QPA&t=10s',
@@ -18,9 +18,22 @@ test('YouTube covers do not depend on the rate-limited watch page', async () => 
 
 test('non-video and lookalike URLs retain OpenGraph discovery', async () => {
   const requested = [];
-  const { internals } = loadMain({ requestUrl: async ({url}) => {
-    requested.push(url); return { text: '<meta property="og:image" content="/cover.jpg">' };
-  } });
+  const { EventEmitter } = require('node:events');
+  const httpsModule = { request(url, _options, callback) {
+    const req = new EventEmitter();
+    req.end = () => {
+      requested.push(url.href);
+      const response = new EventEmitter();
+      response.statusCode = 200;
+      response.headers = {};
+      callback(response);
+      response.emit('data', Buffer.from('<meta property="og:image" content="/cover.jpg">'));
+      response.emit('end');
+      req.emit('close');
+    };
+    return req;
+  } };
+  const { internals } = loadMain({ httpsModule });
   const plugin = makePlugin(internals, makeApp([]).app);
   for (const url of ['https://notyoutube.com/watch?v=tTnUcSj-QPA', 'https://youtube.com/@channel', 'https://youtube.com/watch?v=bad', 'https://example.com/article']) {
     assert.equal(await plugin.buscarCapa(url), new URL('/cover.jpg',url).href);

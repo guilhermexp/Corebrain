@@ -10,14 +10,16 @@ or build them locally as described below.
 1. Download `Corebrain-plugin-0.4.0.zip` and extract it.
 2. Copy the contained `clippings-gallery/` directory to
    `<vault>/.obsidian/plugins/`. For a manually downloaded release, copy the
-   four standalone root files (`main.js`, `manifest.json`, `styles.css` and
-   `LICENSE`) into `<vault>/.obsidian/plugins/clippings-gallery/`.
+   five standalone root files (`main.js`, `manifest.json`, `styles.css`,
+   `LICENSE` and `window-lifecycle.js`) into `<vault>/.obsidian/plugins/clippings-gallery/`.
 3. In Obsidian, enable **Corebrain** under **Settings → Community plugins**.
 
 The plugin ID remains `clippings-gallery` for upgrade compatibility. It is
 marked desktop-only because the local bridge uses Node's HTTP APIs; mobile
-Obsidian is not supported.
-
+Obsidian is not supported. The plugin requires Obsidian ≥ 1.11.4 to support
+native `SecretStorage`, which securely stores the bridge token and model API key
+outside of plaintext `data.json`. Existing installations automatically migrate
+stored tokens to `SecretStorage` on first load.
 New captures record their arrival in the immutable `corebrain_added_at`
 property, so the gallery can show newest arrivals first. Existing notes fall
 back to their file creation time; installing this release does not rewrite or
@@ -54,9 +56,9 @@ separate ID `corebrain-clipper@guilhermexp.github.io` rather than the upstream
 ## Safari
 
 Safari packaging and signing are not part of this release. The Safari source
-manifest remains available for development, but no signed Safari installation
-is promised.
-
+manifest remains available for development, and the bridge server origin check
+recognizes Safari extension schemes (`safari-web-extension:`). However, no signed
+Safari installation is promised.
 ## Pair the bridge
 
 After enabling the plugin, open **Settings → Corebrain** and note the loopback
@@ -64,15 +66,29 @@ port and installation token shown by the plugin. In the extension settings,
 enter the same values and run the connection check. The extension stores these
 values in browser `storage.local` under `corebrain_bridge_port` and
 `corebrain_bridge_token`.
+The bridge listens on `127.0.0.1` and uses **protocol 2** with identity proof
+challenges (`GET /prova`) before sending `Authorization: Bearer <token>`.
+Because protocol 2 introduces mutual identity checks, **the plugin and extension
+must be updated together**. If one side is upgraded while the other runs legacy
+protocol 1, pairing checks will report a protocol or verification error.
+Do not publish or paste the token into URLs, logs or bug reports. The default
+clipping folder is `Clippings`; change it in the plugin settings if required.
+On macOS, closing the vault window hides it and leaves the bridge listening.
+Choose Quit Obsidian to exit. Clicking the Dock icon shows the same window
+again; disabling the plugin removes that close handler. A capture received
+while the window is hidden is written without opening a note or the gallery.
+If Obsidian is unavailable, use the extension's direct capture path instead of
+expecting the bridge to work.
 
-The bridge listens on `127.0.0.1` and authenticates requests with
-`Authorization: Bearer <token>`. Do not publish or paste the token into URLs,
-logs or bug reports. The default clipping folder is `Clippings`; change it in
-the plugin settings if required. If Obsidian is unavailable, use the
-extension's direct capture path instead of expecting the bridge to work.
-
+Note on cover fetching and network proxies: cover images and the open-graph
+metadata used to find them are retrieved by a direct Node network client that
+blocks private/loopback ranges and DNS rebinding, without system proxies.
+Manual link capture uses Obsidian `requestUrl` and does not apply this filter.
 ### Capture troubleshooting
 
+- **Protocol mismatch / unverified bridge:** ensure both the Obsidian plugin and
+  browser extension are updated together to protocol 2. A legacy extension cannot
+  authenticate against a protocol 2 bridge, and vice-versa.
 - **401 / authentication failed:** fill in the existing installation token in
   the extension settings and test the connection. A successful connection check
   validates pairing; it does not prove that a clipping has been saved.
@@ -80,7 +96,6 @@ extension's direct capture path instead of expecting the bridge to work.
   unpacked extension. The clip bridge now normalizes page titles into safe,
   bounded filenames before sending them. The note content and frontmatter title
   are preserved; server-side path and authentication checks remain enabled.
-
 For inline playback, enable Obsidian's built-in **Web Viewer** core plugin.
 
 ## External accounts and keys

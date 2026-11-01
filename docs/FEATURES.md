@@ -45,7 +45,10 @@ login and external API availability.
   after building. See [Instagram import](instagram-saved-import.md).
 - **Images and covers**, including local covers, retries for missing images and
   a carousel for additional images in a note. GIF images can be selected as the
-  cover when available.
+  cover when available (validated by file signature). Cover fetching and image
+  download use a hardened direct network client with DNS rebinding and private IP
+  filtering; cover requests do not use system proxy configurations or external
+  authenticated sessions.
 - **Collections and model assistance**: classify uncategorized notes with a
   model-compatible API and translate titles/descriptions in batches. Original
   values are retained so a translation can be reverted.
@@ -71,9 +74,27 @@ login and external API availability.
 
 ## Bridge and privacy boundaries
 
-The bridge is loopback-only and requires the installation token. Pairing uses
-`127.0.0.1`, a configurable port and `Authorization: Bearer <token>`; the
-extension keeps the port and token in `storage.local`. Credentials and X
+The bridge is loopback-only and implements identity verification under **protocol 2**.
+Before transmitting an authenticated request, the extension calls `GET /prova` with
+a random 256-bit challenge nonce to verify the plugin's identity via HMAC-SHA256
+without sending credentials to an unverified endpoint. Both plugin and extension
+must be updated together to protocol 2 for pairing.
+
+Bridge pairing uses `127.0.0.1`, a configurable port and `Authorization: Bearer <token>`.
+On macOS, with Corebrain enabled, closing the vault window hides that window
+instead of unloading the plugin. The bridge keeps accepting captures and writes
+them without showing the window, opening the note or opening the gallery.
+Quit still exits Obsidian, the Dock icon shows the existing window, and
+disabling the plugin removes the handlers it installed. The behavior is
+implemented by `window-lifecycle.js`, loaded in Obsidian's main process through
+the `@electron/remote` already shipped with Obsidian. It is not a separate
+daemon and it does not patch the Obsidian binary.
+Sensitive credentials in the plugin (bridge token and model API key) are stored via
+Obsidian's native `SecretStorage` (`minAppVersion: 1.11.4`) and never persisted in
+plaintext within `data.json`. The extension retains bridge settings in browser
+`storage.local`. Bridge callers are restricted by CORS and origin validation to
+authorized browser extensions (supporting Chrome, Firefox and Safari extension
+origins `safari-web-extension:`) and reject web pages. Credentials and X
 sessions belong to each installer and are never release inputs. See
 [INSTALL.md](INSTALL.md) for platform setup and [PRIVACY.md](../PRIVACY.md) for
 the release boundary.
