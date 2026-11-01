@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { createHmac } from 'node:crypto';
 import browser from './browser-polyfill';
-import { buscarBookmarks, bookmarkParaNota, pluginDisponivel, enviarPelaPonte, clipPelaPonte, jaNaGaleria, podeAvancarMarcador, DEFAULT_X_BOOKMARK_FOLDER } from './x-bookmarks';
+import { buscarBookmarks, bookmarkParaNota, pluginDisponivel, enviarPelaPonte, clipPelaPonte, jaNaGaleria, podeAvancarMarcador, DEFAULT_X_BOOKMARK_FOLDER, estaLogadoNoX } from './x-bookmarks';
 
 /**
  * O que importa aqui e a parada incremental e a paginacao: sao um loop com
@@ -46,11 +47,30 @@ function mockFetch(paginas: unknown[]) {
 	})) as unknown as typeof fetch;
 }
 
+function stubBridgeFetch(handler: (url: string, init: RequestInit) => unknown) {
+	vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+		if (url.includes('/prova?')) {
+			const stored = await browser.storage.local.get('corebrain_bridge_token');
+			const nonce = new URL(url).searchParams.get('nonce');
+			const prova = createHmac('sha256', String(stored.corebrain_bridge_token)).update(`corebrain-ponte-prova:v1:${nonce}`).digest('hex');
+			return { ok: true, status: 200, json: async () => ({ plugin: 'clippings-gallery', protocol: 2, prova }) };
+		}
+		return handler(url, init);
+	});
+}
+
 beforeEach(() => {
+	vi.restoreAllMocks();
+	vi.spyOn(browser.storage.local, 'get').mockResolvedValue({ corebrain_bridge_token: 'valid' });
 	(globalThis as any).chrome = {
 		cookies: { get: async ({ name }: { name: string }) => ({ value: name === 'ct0' ? 'csrf' : 'tok' }) },
 		storage: { local: { get: async () => ({}), set: async () => undefined } },
 	};
+});
+
+test('cookie API failure returns an actionable login status error', async () => {
+	vi.stubGlobal('chrome', { cookies: { get: vi.fn().mockRejectedValue(new Error('cookies indisponíveis')) } });
+	await expect(estaLogadoNoX()).resolves.toEqual({ logado: false, error: 'cookies indisponíveis' });
 });
 
 describe('buscarBookmarks', () => {
@@ -176,12 +196,12 @@ describe('ponte com o plugin do Obsidian', () => {
 	};
 
 	test('detecta o plugin pelo /ping', async () => {
-		globalThis.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ protocol: 1, plugin: 'clippings-gallery' }) })) as unknown as typeof fetch;
+		stubBridgeFetch(vi.fn(async () => ({ ok: true, json: async () => ({ protocol: 2, plugin: 'clippings-gallery' }) })));
 		expect(await pluginDisponivel()).toBe(true);
 	});
 
 	test('sync rejects incompatible bridge protocol instead of falling back', async () => {
-		globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ protocol: 2, plugin: 'clippings-gallery' }) })) as unknown as typeof fetch;
+		stubBridgeFetch(vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ protocol: 1, plugin: 'clippings-gallery' }) })));
 		await expect(pluginDisponivel()).rejects.toThrow(/protocol/i);
 	});
 
@@ -192,10 +212,10 @@ describe('ponte com o plugin do Obsidian', () => {
 
 	test('manda TUDO num POST so — e o que evita roubos de foco repetidos', async () => {
 		const chamadas: any[] = [];
-		globalThis.fetch = vi.fn(async (url: any, opts: any) => {
-			chamadas.push({ url, body: JSON.parse(opts.body) });
+		stubBridgeFetch(vi.fn(async (url: string, opts: RequestInit) => {
+			chamadas.push({ url, body: JSON.parse(String(opts.body)) });
 			return { ok: true, json: async () => ({ criados: 3, pulados: 0, erros: 0 }) };
-		}) as unknown as typeof fetch;
+		}));
 
 		const r = await enviarPelaPonte([bm, { ...bm, id: '2' }, { ...bm, id: '3' }], 'X Bookmarks');
 		expect(chamadas).toHaveLength(1); // UMA requisicao, nao uma por nota
@@ -205,12 +225,42 @@ describe('ponte com o plugin do Obsidian', () => {
 	});
 
 	test('erro do plugin vira excecao, pra cair no fallback', async () => {
-		globalThis.fetch = vi.fn(async () => ({ ok: false, status: 500 })) as unknown as typeof fetch;
+		stubBridgeFetch(vi.fn(async () => ({ ok: false, status: 500 })));
 		await expect(enviarPelaPonte([bm], 'p')).rejects.toThrow(/500/);
 	});
 });
+	test('unpaired clipping refuses to send the page without a token', async () => {
+		vi.spyOn(browser.storage.local, 'get').mockResolvedValue({});
+		const fetcher = vi.fn();
+		vi.stubGlobal('fetch', fetcher);
+		await expect(jaNaGaleria('https://example.com')).resolves.toBeNull();
+		await expect(clipPelaPonte('private body', 'note', 'Clippings')).rejects.toThrow(/token/i);
+		expect(fetcher).not.toHaveBeenCalled();
+	});
+
+
+	test('does not fall back to a URI when the bridge identity is unverified', async () => {
+		vi.spyOn(browser.storage.local, 'get').mockResolvedValue({ corebrain_bridge_token: 'paired-token' });
+		const fetcher = vi.fn(async () => ({
+			ok: true, status: 200, json: async () => ({ plugin: 'clippings-gallery', protocol: 2, prova: 'invalid' }),
+		}));
+		vi.stubGlobal('fetch', fetcher);
+		await expect(clipPelaPonte('private body', 'note', 'Clippings')).rejects.toMatchObject({ name: 'BridgeUnverifiedError' });
+		expect(fetcher).toHaveBeenCalledTimes(1);
+	});
 
 describe('authenticated Corebrain bridge', () => {
+	test.each([
+		{ ok: true, caminho: '', duplicata: false },
+		{ ok: true, caminho: '   ', duplicata: false },
+		{ ok: true, caminho: 'Clippings/test.md' },
+		{ ok: true, caminho: 'Clippings/test.md', duplicata: 'false' },
+		{ ok: 'true', caminho: 'Clippings/test.md', duplicata: false },
+	])('rejects malformed clip acknowledgement %#', async (ack) => {
+		stubBridgeFetch(vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ack }));
+		await expect(clipPelaPonte('body', 'note', 'Clippings')).rejects.toThrow();
+	});
+
 	test('uses Clippings as the fresh-install X bookmark folder', () => {
 		expect(DEFAULT_X_BOOKMARK_FOLDER).toBe('Clippings');
 	});
@@ -228,7 +278,7 @@ describe('authenticated Corebrain bridge', () => {
 			corebrain_bridge_token: 'secret-token',
 		} as any);
 		const fetcher = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ existe: false }) });
-		vi.stubGlobal('fetch', fetcher);
+		stubBridgeFetch(fetcher);
 		await jaNaGaleria('https://a.dev');
 		const sentHeaders = fetcher.mock.calls[0][1].headers as Headers;
 		expect(sentHeaders.get('Authorization')).toBe('Bearer secret-token');
@@ -241,7 +291,7 @@ describe('authenticated Corebrain bridge', () => {
 			corebrain_bridge_port: 27125,
 			corebrain_bridge_token: 'wrong',
 		} as any);
-		vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, text: async () => '' }));
+		stubBridgeFetch(vi.fn().mockResolvedValue({ ok: false, status: 401, text: async () => '' }));
 		await expect(clipPelaPonte('body', 'note', 'Clippings')).rejects.toThrow(/authentication/i);
 	});
 
@@ -250,7 +300,7 @@ describe('authenticated Corebrain bridge', () => {
 			corebrain_bridge_port: 27125,
 			corebrain_bridge_token: 'valid',
 		} as any);
-		vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 413, text: async () => '' }));
+		stubBridgeFetch(vi.fn().mockResolvedValue({ ok: false, status: 413, text: async () => '' }));
 		await expect(clipPelaPonte('body', 'note', 'Clippings')).rejects.toThrow(/413/);
 	});
 
@@ -267,7 +317,7 @@ describe('authenticated Corebrain bridge', () => {
 			status: 200,
 			json: async () => ({ ok: true, caminho: 'Clippings/note.md', duplicata: false }),
 		});
-		vi.stubGlobal('fetch', fetcher);
+		stubBridgeFetch(fetcher);
 
 		await clipPelaPonte(conteudo, nome, 'Clippings');
 
@@ -289,7 +339,7 @@ describe('authenticated Corebrain bridge', () => {
 			status: 200,
 			json: async () => ({ ok: true, caminho: 'Clippings/note.md', duplicata: false }),
 		});
-		vi.stubGlobal('fetch', fetcher);
+		stubBridgeFetch(fetcher);
 
 		await clipPelaPonte('unchanged content', nome, 'Clippings');
 
@@ -314,7 +364,7 @@ describe('authenticated Corebrain bridge', () => {
 			status: 200,
 			json: async () => ({ ok: true, caminho: 'Clippings/note.md', duplicata: false }),
 		});
-		vi.stubGlobal('fetch', fetcher);
+		stubBridgeFetch(fetcher);
 
 		await clipPelaPonte('unchanged content', 'a'.repeat(119) + '😀', 'Clippings');
 
@@ -333,7 +383,7 @@ describe('authenticated Corebrain bridge', () => {
 			ok: true, status: 200,
 			json: async () => ({ ok: true, caminho: 'Clippings/note.md', duplicata: false }),
 		});
-		vi.stubGlobal('fetch', fetcher);
+		stubBridgeFetch(fetcher);
 		await clipPelaPonte('body', name, 'Clippings');
 		expect(JSON.parse(fetcher.mock.calls[0][1].body as string).nome).toBe(expected);
 	});
@@ -348,7 +398,7 @@ describe('authenticated Corebrain bridge', () => {
 			status: 200,
 			json: async () => ({ ok: true, caminho: 'Clippings/Untitled.md', duplicata: false }),
 		});
-		vi.stubGlobal('fetch', fetcher);
+		stubBridgeFetch(fetcher);
 
 		await clipPelaPonte('unchanged content', '///:*?"<>|#[]', 'Clippings');
 

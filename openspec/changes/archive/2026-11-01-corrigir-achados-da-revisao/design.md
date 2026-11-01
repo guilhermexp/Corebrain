@@ -68,6 +68,17 @@ O callback de progresso de `sendSaved()` passa as contagens acumuladas após cad
 ### D17. Divisão do trabalho
 Dois workers em worktrees separados a partir da mesma base: **plugin** (todo `main.js`, `manifest.json`, `versions.json`, `tests/`, `test.js`, CI, docs do plugin; inclui o lado servidor de E5/E6) e **extensão** (todo `extension/`, inclui o lado cliente de E6). O único contrato compartilhado é D12. O orquestrador integra as duas branches e roda o teste ponta a ponta do pareamento.
 
+### D18. Captura silenciosa com vault oculto
+Reprodução no Obsidian real: com vault carregado e aplicativo oculto, `/clip` gravou sem abrir nota; após fechar a última janela o renderer e a ponte em 27125 encerraram, embora o processo do app continuasse rodando. O próximo clique caiu em URI e reabriu o vault com a nota de teste. O dono escolheu manter o vault carregado e oculto em vez de enfileirar até reabrir.
+
+No macOS, o plugin registra ciclo de vida Electron da janela principal: fechamento normal oculta em vez de destruir a janela, sem revelar folhas; encerramento explícito do app continua permitido. Registros são pertencentes à instância e removidos no unload; não interceptar fechar abas internas, janelas secundárias ou reinício/reload. Reativação pelo Dock deve mostrar a janela existente. Usar o runtime Electron já fornecido pelo Obsidian (`@electron/remote`), sem dependência nova nem daemon. Comprovar comportamento no runtime real — mocks não provam retenção do renderer ou encerramento nativo.
+
+No envio de página, ponte ausente/sem pareamento/resposta inválida deixa o popup com erro recuperável e conteúdo disponível, nunca invoca URI para simular sucesso. Validar `ok: true`, caminho não vazio e indicador de duplicata antes de incrementar estatística ou fechar popup. O indicador de envio deve ser limpo em `finally`.
+
+A ação visível **Salvar página atual** é uma captura normal pela ponte e não pode ser bloqueada por comportamento diário herdado de um modelo escondido. Não alterar os modelos/configurações do dono para fazer o teste passar nem adicionar semântica de append/overwrite.
+
+Prova de aceitação do dono: atualizar a extensão efetivamente instalada no Aside, usar o vault que ela já tem configurado e salvar um vídeo do YouTube pelo clique normal no ícone da barra e no botão. Conferir arquivo real e foco sem abrir nota/galeria. Não criar vault, perfil, popup por URL ou fluxo alternativo para substituir essa prova. A imagem enviada pelo dono, com o erro de notas diárias, já prova a falha anterior.
+
 ## Risks / Trade-offs
 
 - [Plugin e extensão em versões diferentes deixam de parear] → mensagem explícita de "atualize" nos dois casos; release dos dois juntos.

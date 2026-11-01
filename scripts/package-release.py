@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build deterministic Corebrain release artifacts.
 
-The packager deliberately accepts only the four Obsidian runtime files and the
+The packager deliberately accepts only the allowlisted Obsidian runtime files and the
 already-built browser extension directory.  It never walks the source tree when
 creating an artifact, so local notes, credentials, profiles, dependencies and
 source maps cannot leak into a release by accident.
@@ -24,12 +24,12 @@ from urllib.parse import unquote, urlsplit
 
 PLUGIN_ID = "clippings-gallery"
 PLUGIN_NAME = "Corebrain"
-PLUGIN_VERSION = "0.4.0"
+PLUGIN_VERSION = "0.4.1"
 EXTENSION_NAME = "corebrain-clipper"
 EXTENSION_DISPLAY_NAME = "Corebrain Web Clipper"
-EXTENSION_VERSION = "1.8.0"
+EXTENSION_VERSION = "1.8.2"
 CANONICAL_HOME = "https://github.com/guilhermexp/Corebrain"
-PLUGIN_FILES = ("main.js", "manifest.json", "styles.css", "LICENSE")
+PLUGIN_FILES = ("main.js", "manifest.json", "styles.css", "LICENSE", "window-lifecycle.js")
 
 # These names are ignored rather than copied when a polluted build directory is
 # supplied.  They are listed explicitly to keep the release boundary obvious.

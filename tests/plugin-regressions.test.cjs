@@ -11,6 +11,20 @@ const {
   makePlugin,
 } = require("./plugin-harness.cjs");
 
+test("P7 rebuilding add toolbar leaves one outside-click handler", () => {
+  const { internals, document } = loadMain();
+  const view = new internals.GaleriaView({ app: makeApp().app }, {});
+  let calls = 0;
+  for (let i = 0; i < 3; i++) {
+    const bar = new FakeElement();
+    view.botaoAdicionar(bar);
+    const fab = bar.children[0];
+    fab.hasClass = () => { calls++; return false; };
+  }
+  document.dispatchEvent({ type: "click" });
+  assert.equal(calls, 1);
+});
+
 function modelResponse(content) {
   return { json: { choices: [{ message: { content } }] } };
 }

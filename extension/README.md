@@ -12,6 +12,24 @@ The extension is distributed under the MIT License; preserve the
 originated from the open-source Obsidian Web Clipper project and retains
 upstream notices and third-party licenses where applicable.
 
+The extension and Corebrain plugin must both support bridge protocol 2.
+Before each authenticated loopback request, the extension verifies the
+plugin's HMAC challenge with the pairing token; an incompatible or
+unverified bridge is not sent the token or clipping content. Update both
+components together if pairing reports an unsupported protocol.
+
+Saving a page requires a paired, running Corebrain bridge. If the bridge cannot
+confirm the write, the page content remains available for another attempt; the
+clipper does not open Obsidian as a fallback. Saving a page always creates a
+clipping, even when the selected template is configured for daily notes; it
+does not append or prepend to the daily note.
+
+Instagram sync feedback shows discovered posts while scanning and the processed
+total, created notes, duplicates and errors while saving. The result disappears
+after four seconds (eight for errors or partial results), restoring the initial
+controls. Reopening the popup does not replay an expired result; an active sync
+remains visible and its work is not cancelled by closing the popup.
+
 ## Development
 
 ```sh

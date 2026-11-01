@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BridgeAuthenticationError } from './utils/x-bookmarks';
+import { createRequire } from 'node:module';
+import { BridgeAuthenticationError, type ResultadoSync, type XBookmark } from './utils/x-bookmarks';
 
 const testState = vi.hoisted(() => {
 	const listeners: Array<(...args: any[]) => any> = [];
@@ -49,7 +50,7 @@ const testState = vi.hoisted(() => {
 		storage,
 		browserMock,
 		bridgeAvailable: vi.fn(async () => true),
-		fetchBookmarks: vi.fn(async () => ({ novos: [], paginas: 0, alcancouFim: true })),
+		fetchBookmarks: vi.fn(async (): Promise<ResultadoSync> => ({ novos: [], paginas: 0, alcancouFim: true })),
 		sendBookmarks: vi.fn(async () => ({ criados: 0, pulados: 0, erros: 0 })),
 		fallbackSave: vi.fn(async () => ({ salvos: 0, erros: 0 })),
 	};
@@ -120,7 +121,118 @@ async function dispatchXSync() {
 	return { keepChannelOpen, response };
 }
 
+describe('embedded panel routing', () => {
+	it('resolves an embedded panel to its host tab while another window is active', async () => {
+		testState.browserMock.tabs.query.mockResolvedValue([{ id: 42 }]);
+		let response: unknown;
+		xSyncListener()({ action: 'getActiveTab' }, { frameId: 1, tab: { id: 17 } }, (value: unknown) => { response = value; });
+		await vi.waitFor(() => expect(response).toEqual({ tabId: 17 }));
+	});
+
+	it('opens the embedded panel in the specified source tab rather than the active window', async () => {
+		testState.browserMock.tabs.query.mockResolvedValue([{ id: 42 }]);
+		testState.browserMock.runtime.sendMessage.mockClear();
+		let response: unknown;
+		xSyncListener()({ action: 'getActiveTabAndToggleIframe', tabId: 17 }, {}, (value: unknown) => { response = value; });
+		await vi.waitFor(() => expect(response).toEqual({ success: true }));
+		expect(testState.browserMock.runtime.sendMessage).toHaveBeenCalledWith({
+			action: 'extensionPageMessage', targetTabId: 17, message: { action: 'toggle-iframe' },
+		});
+	});
+});
+
 describe('background X bookmark sync message', () => {
+	it('preserves gallery arrival order across 201 bookmarks and batch boundaries', async () => {
+		// Use the real plugin writer and its in-memory vault, rather than echoing
+		// the batch passed to the bridge transport mock.
+		const harness = createRequire(import.meta.url)('../../tests/plugin-harness.cjs') as {
+			loadMain: () => { internals: { Receptor: new (plugin: unknown) => {
+				_gravar: (notes: Array<{ nome: string; conteudo: string; source: string }>, folder: string) =>
+					Promise<{ criados: number; pulados: number; erros: number }>;
+			} } };
+			makeApp: (files: never[]) => {
+				app: unknown;
+				files: Array<{ basename: string; frontmatter: { corebrain_added_at: string } }>;
+			};
+			makePlugin: (internals: unknown, app: unknown) => unknown;
+		};
+		const { internals } = harness.loadMain();
+		const { app, files } = harness.makeApp([]);
+		const receptor = new internals.Receptor(harness.makePlugin(internals, app));
+		const bookmarks: XBookmark[] = Array.from({ length: 201 }, (_, i) => {
+			const id = String(201 - i);
+			return { id, autor: 'author', nomeAutor: 'Author', texto: id,
+				url: `https://x.com/author/status/${id}`, criadoEm: '', midia: [], links: [] };
+		});
+		testState.fetchBookmarks.mockResolvedValue({ novos: bookmarks, paginas: 3, alcancouFim: true });
+		testState.sendBookmarks.mockImplementation(async (...args: unknown[]) => {
+			const batch = args[0] as XBookmark[];
+			const folder = args[1] as string;
+			return receptor._gravar(batch.map((item) => ({
+				nome: item.id, source: item.url, conteudo: `---\nsource: "${item.url}"\n---\n${item.texto}`,
+			})), folder);
+		});
+		const { response } = await dispatchXSync();
+		expect(response).toMatchObject({ success: true, salvos: 201, pulados: 0, erros: 0 });
+		expect(testState.storage.x_bookmarks_last_id).toBe('201');
+		const arrivals = [...files].sort((a, b) =>
+			Date.parse(a.frontmatter.corebrain_added_at) - Date.parse(b.frontmatter.corebrain_added_at));
+		expect(arrivals.map((file) => file.basename)).toEqual(Array.from({ length: 201 }, (_, i) => String(i + 1)));
+	});
+
+	it('cancels between batches and reports progress without advancing the cursor', async () => {
+		const bookmarks = Array.from({ length: 201 }, (_, i) => ({
+			id: String(i), autor: '', nomeAutor: '', texto: '', url: '', criadoEm: '', midia: [], links: [],
+		}));
+		testState.fetchBookmarks.mockResolvedValue({ novos: bookmarks, paginas: 3, alcancouFim: true });
+		testState.browserMock.runtime.sendMessage.mockClear();
+		testState.sendBookmarks.mockImplementation(async () => {
+			xSyncListener()({ action: 'x-bookmarks-cancelar' }, {}, () => {});
+			return { criados: 100, pulados: 0, erros: 0 };
+		});
+		const { response } = await dispatchXSync();
+		expect(response).toMatchObject({ success: true, cancelado: true, salvos: 100 });
+		expect(testState.sendBookmarks).toHaveBeenCalledTimes(1);
+		expect(testState.storage.x_bookmarks_last_id).toBe('old');
+		expect(testState.browserMock.runtime.sendMessage).toHaveBeenCalledWith({
+			action: 'x-bookmarks-saving', feitos: 100, total: 201, viaPlugin: true,
+		});
+	});
+
+	it('sends 10001 bookmarks in sequential batches and sums their outcomes', async () => {
+		const bookmarks = Array.from({ length: 10001 }, (_, i) => ({
+			id: String(10001 - i), autor: '', nomeAutor: '', texto: '', url: '', criadoEm: '', midia: [], links: [],
+		}));
+		testState.fetchBookmarks.mockResolvedValue({ novos: bookmarks, paginas: 101, alcancouFim: true });
+		const sizes: number[] = [];
+		testState.sendBookmarks.mockImplementation(async (...args: unknown[]) => {
+			const batch = args[0] as typeof bookmarks;
+			sizes.push(batch.length);
+			return { criados: batch.length - 1, pulados: 1, erros: 0 };
+		});
+		const { response } = await dispatchXSync();
+		expect(sizes).toEqual([...Array(100).fill(100), 1]);
+		expect(response).toMatchObject({ success: true, salvos: 9900, pulados: 101, erros: 0, encontrados: 10001 });
+		expect(testState.storage.x_bookmarks_last_id).toBe('10001');
+	});
+
+	it('stops on the third failed batch without advancing the cursor', async () => {
+		const bookmarks = Array.from({ length: 301 }, (_, i) => ({
+			id: String(301 - i), autor: '', nomeAutor: '', texto: '', url: '', criadoEm: '', midia: [], links: [],
+		}));
+		testState.fetchBookmarks.mockResolvedValue({ novos: bookmarks, paginas: 4, alcancouFim: true });
+		let batches = 0;
+		testState.sendBookmarks.mockImplementation(async () => {
+			batches++;
+			if (batches === 3) throw new Error('terceiro lote falhou');
+			return { criados: 100, pulados: 0, erros: 0 };
+		});
+		const { response } = await dispatchXSync();
+		expect(response).toEqual({ success: false, error: 'terceiro lote falhou' });
+		expect(batches).toBe(3);
+		expect(testState.storage.x_bookmarks_last_id).toBe('old');
+	});
+
 	it('fails before requesting X and never opens or changes a browser tab without the bridge', async () => {
 		testState.bridgeAvailable.mockResolvedValue(false);
 		testState.fetchBookmarks.mockResolvedValue({ novos: [{ id: '2' } as any], paginas: 1, alcancouFim: true } as any);

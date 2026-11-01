@@ -7,7 +7,7 @@
  */
 
 import { debugLog } from './debug';
-import { fetchBridge, isCompatibleBridge } from './bridge-settings';
+import { fetchBridge, isCompatibleBridge, BridgeUnverifiedError, BridgeProtocolError, BridgeMissingTokenError } from './bridge-settings';
 
 // bearer publico do app web do X (nao e segredo; e o mesmo que a pagina envia)
 const BEARER =
@@ -117,10 +117,14 @@ async function pegarCookie(nome: string): Promise<string | null> {
 	return c?.value || null;
 }
 
-export async function estaLogadoNoX(): Promise<boolean> {
-	// ct0 (csrf) so existe em sessao autenticada; auth_token e httpOnly mas visivel via API
-	const [ct0, auth] = await Promise.all([pegarCookie('ct0'), pegarCookie('auth_token')]);
-	return !!(ct0 && auth);
+export async function estaLogadoNoX(): Promise<{ logado: boolean; error?: string }> {
+	try {
+		// ct0 (csrf) and auth_token are both present in an authenticated session.
+		const [ct0, auth] = await Promise.all([pegarCookie('ct0'), pegarCookie('auth_token')]);
+		return { logado: !!(ct0 && auth) };
+	} catch (error) {
+		return { logado: false, error: error instanceof Error ? error.message : String(error) };
+	}
 }
 
 /**
@@ -319,10 +323,10 @@ function authError(response: Response): BridgeAuthenticationError | null {
  * checagem falhou quebraria a extensao toda vez que o Obsidian nao estivesse
  * aberto — o oposto do que o usuario quer.
  */
-export async function jaNaGaleria(url: string): Promise<Duplicata | null> {
+export async function jaNaGaleria(url: string, signal?: AbortSignal): Promise<Duplicata | null> {
 	if (!url) return null;
 	try {
-		const r = await fetchBridge(`/tem?url=${encodeURIComponent(url)}`, { method: 'GET' });
+		const r = await fetchBridge(`/tem?url=${encodeURIComponent(url)}`, { method: 'GET', signal });
 		const erroAuth = authError(r);
 		if (erroAuth) throw erroAuth;
 		// A transient bridge-side read failure is still "unknown"; the actual
@@ -332,7 +336,8 @@ export async function jaNaGaleria(url: string): Promise<Duplicata | null> {
 		const j = await r.json();
 		return { existe: !!j.existe, caminho: typeof j.caminho === 'string' ? j.caminho : null };
 	} catch (e) {
-		if (e instanceof BridgeAuthenticationError) throw e;
+		if (e instanceof BridgeMissingTokenError) return null;
+		if (e instanceof BridgeAuthenticationError || e instanceof BridgeUnverifiedError || e instanceof BridgeProtocolError) throw e;
 		return null;
 	}
 }
@@ -351,7 +356,8 @@ export async function pluginDisponivel(): Promise<boolean> {
 		}
 		return true;
 	} catch (e) {
-		if (e instanceof BridgeRequestError) throw e;
+		if (e instanceof BridgeMissingTokenError) return false;
+		if (e instanceof BridgeRequestError || e instanceof BridgeUnverifiedError || e instanceof BridgeProtocolError) throw e;
 		return false;
 	}
 }
@@ -379,38 +385,29 @@ export async function enviarPelaPonte(
 	return await r.json();
 }
 
-/**
- * Clip avulso pela ponte, sem `obsidian://`.
- *
- * Pela URI o macOS ativa o Obsidian e abre a nota: voce perde a pagina que
- * estava lendo a cada clip. Por aqui o plugin escreve com a API do vault e
- * nada ganha foco.
- *
- * Devolve null quando NAO DA PRA SABER (Obsidian fechado, plugin desligado,
- * porta trocada). Quem chama cai no `obsidian://` nesse caso — sem isso a
- * extensao pararia de funcionar com o Obsidian fechado.
- */
+/** Grava uma página pela ponte e só confirma após um ACK completo do plugin. */
 export async function clipPelaPonte(
 	conteudo: string,
 	nome: string,
 	pasta: string,
-): Promise<{ caminho: string; duplicata: boolean } | null> {
-	try {
-		const r = await fetchBridge('/clip', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ conteudo, nome: normalizarNomeDaPonte(nome), pasta }),
-		});
-		const erroAuth = authError(r);
-		if (erroAuth) throw erroAuth;
-		if (!r.ok) throw new BridgeRequestError(r.status);
-		const j = await r.json();
-		if (!j || !j.ok) return null;
-		return { caminho: String(j.caminho || ''), duplicata: !!j.duplicata };
-	} catch (e) {
-		if (e instanceof BridgeRequestError) throw e;
-		return null;
+	signal?: AbortSignal,
+): Promise<{ caminho: string; duplicata: boolean }> {
+	const r = await fetchBridge('/clip', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ conteudo, nome: normalizarNomeDaPonte(nome), pasta }),
+		signal,
+	});
+	const erroAuth = authError(r);
+	if (erroAuth) throw erroAuth;
+	if (!r.ok) throw new BridgeRequestError(r.status);
+	const ack: unknown = await r.json();
+	if (!ack || typeof ack !== 'object' || !('ok' in ack) || ack.ok !== true ||
+		!('caminho' in ack) || typeof ack.caminho !== 'string' || !ack.caminho.trim() ||
+		!('duplicata' in ack) || typeof ack.duplicata !== 'boolean') {
+		throw new Error('A ponte não confirmou a gravação. Confira o Corebrain e tente novamente.');
 	}
+	return { caminho: ack.caminho, duplicata: ack.duplicata };
 }
 
 /**

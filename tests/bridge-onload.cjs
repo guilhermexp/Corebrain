@@ -14,24 +14,28 @@ function loadPluginClass() {
   };
   Module._load = function (request, parent, isMain) {
     if (request === 'obsidian') return fakeObsidian;
+    if (request === '@electron/remote') {
+      return {
+        getCurrentWindow: () => ({ id: 1 }),
+        require: () => ({ retain() {}, release() {} }),
+      };
+    }
     return originalLoad.call(this, request, parent, isMain);
   };
-  try {
-    const filename = path.resolve(__dirname, '../main.js');
-    const loaded = new Module(filename, module);
-    loaded.filename = filename;
-    loaded.paths = Module._nodeModulePaths(path.dirname(filename));
-    loaded._compile(fs.readFileSync(filename, 'utf8') + '\nmodule.exports.Receptor = Receptor;\n', filename);
-    return loaded.exports;
-  } finally {
-    Module._load = originalLoad;
-  }
+  const filename = path.resolve(__dirname, '../main.js');
+  const loaded = new Module(filename, module);
+  loaded.filename = filename;
+  loaded.paths = Module._nodeModulePaths(path.dirname(filename));
+  loaded._compile(fs.readFileSync(filename, 'utf8') + '\nmodule.exports.Receptor = Receptor;\n', filename);
+  return loaded.exports;
 }
 
 function fakeApp() {
   const event = () => ({ unload() {} });
+  const secrets = new Map();
   return {
     metadataCache: { on: event, getFileCache: () => null },
+    secretStorage: { getSecret: (id) => secrets.get(id) ?? null, setSecret: (id, value) => secrets.set(id, value) },
     workspace: { on: event, getLeavesOfType: () => [] },
     vault: { on: event, getMarkdownFiles: () => [], getAbstractFileByPath: () => null },
   };
@@ -39,6 +43,7 @@ function fakeApp() {
 
 function prepare(plugin) {
   plugin.app = fakeApp();
+  plugin.manifest = { id: 'clippings-gallery', dir: '/synthetic/plugins/clippings-gallery' };
   plugin.registerView = () => {};
   plugin.addRibbonIcon = () => {};
   plugin.addCommand = () => {};
@@ -49,7 +54,7 @@ function prepare(plugin) {
   plugin.receptor = null;
 }
 
-test('first onload generates and persists a random bridge token', async () => {
+test('first onload generates a bridge token in SecretStorage', async () => {
   const PluginClass = loadPluginClass();
   const plugin = new PluginClass();
   prepare(plugin);
@@ -60,12 +65,12 @@ test('first onload generates and persists a random bridge token', async () => {
   PluginClass.Receptor.prototype.parar = function () {};
 
   await plugin.onload();
-  assert.match(plugin.cfg.ponteToken, /^[0-9a-f]{64}$/);
-  assert.equal(saved.length, 1);
-  assert.equal(saved[0].ponteToken, plugin.cfg.ponteToken);
+  assert.match(plugin.ponteToken, /^[0-9a-f]{64}$/);
+  assert.equal(plugin.app.secretStorage.getSecret('corebrain-ponte-token'), plugin.ponteToken);
+  assert.ok(saved.every((data) => !('ponteToken' in data)));
 });
 
-test('existing token survives a subsequent onload without replacement', async () => {
+test('legacy token is migrated without replacement', async () => {
   const PluginClass = loadPluginClass();
   const plugin = new PluginClass();
   prepare(plugin);
@@ -77,6 +82,25 @@ test('existing token survives a subsequent onload without replacement', async ()
   PluginClass.Receptor.prototype.parar = function () {};
 
   await plugin.onload();
-  assert.equal(plugin.cfg.ponteToken, token);
-  assert.equal(saved.length, 0);
+  assert.equal(plugin.ponteToken, token);
+  assert.equal(plugin.app.secretStorage.getSecret('corebrain-ponte-token'), token);
+  assert.equal(saved.length, 1);
+  assert.equal('ponteToken' in saved[0], false);
+});
+
+test('token already in SecretStorage survives a subsequent onload', async () => {
+  const PluginClass = loadPluginClass();
+  const plugin = new PluginClass();
+  prepare(plugin);
+  const token = 'c'.repeat(64);
+  plugin.app.secretStorage.setSecret('corebrain-ponte-token', token);
+  plugin.loadData = async () => ({ capaLocal: false });
+  let writes = 0;
+  plugin.saveData = async () => { writes++; };
+  PluginClass.Receptor.prototype.iniciar = function () {};
+  PluginClass.Receptor.prototype.parar = function () {};
+  await plugin.onload();
+  assert.equal(plugin.ponteToken, token);
+  assert.equal(plugin.app.secretStorage.getSecret('corebrain-ponte-token'), token);
+  assert.equal(writes, 0);
 });

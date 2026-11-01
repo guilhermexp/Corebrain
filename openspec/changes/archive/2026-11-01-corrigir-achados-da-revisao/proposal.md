@@ -24,6 +24,7 @@ Ponte e extensão:
 - E4. Status do sync do Instagram mostra contagens acumuladas mesmo após recarga da extensão.
 - E5. A ponte aceita a origem da extensão Safari.
 - E6. **BREAKING (protocolo da ponte 1 → 2):** antes de enviar o token, a extensão exige que a ponte prove conhecê-lo (desafio HMAC). Plugin e extensão precisam ser atualizados juntos.
+- Captura silenciosa (pedido posterior do dono): no macOS, fechar a janela mantém o vault oculto e a ponte funcionando; Sair continua encerrando o app. Adicionar página não usa fallback automático por URI e só confirma entrega após gravação confirmada.
 
 Fora de escopo: as melhorias M1–M6 da revisão, exceto a CI passar a rodar os testes desta change; o plugin `pi-agent` instalado no vault.
 

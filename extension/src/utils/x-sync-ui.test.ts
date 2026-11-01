@@ -21,6 +21,14 @@ describe('X sync result feedback', () => {
 		});
 	});
 
+	it('shows the cookie API error instead of asking the user to log in', async () => {
+		vi.mocked(browser.runtime.sendMessage).mockResolvedValueOnce({ logado: false, error: 'cookies indisponíveis' });
+		initXSync();
+		document.getElementById('x-sync')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+		await vi.waitFor(() => expect(document.getElementById('x-sync-texto')!.textContent).toContain('cookies indisponíveis'));
+		expect(document.getElementById('x-sync-texto')!.textContent).not.toMatch(/faça login/i);
+	});
+
 	it('shows failures and duplicate count instead of claiming everything is up to date', async () => {
 		syncResult = { success: true, salvos: 0, pulados: 5, erros: 2, encontrados: 7, incompleto: true };
 		initXSync();

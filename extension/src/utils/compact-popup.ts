@@ -13,6 +13,10 @@ export function initCompactPopup(): void {
   const text = document.getElementById(`${prefix}-sync-texto`);
   if (!status || !summary || !text) continue;
   const update = () => {
+   if (prefix === 'instagram' && !status.classList.contains('tem-erro')) {
+    summary.textContent = text.textContent?.trim() || label;
+    return;
+   }
    summary.textContent = status.classList.contains('tem-erro')
     ? `${label} · não concluído`
     : status.classList.contains('esta-sincronizando')

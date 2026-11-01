@@ -32,23 +32,24 @@ class PackageReleaseTests(unittest.TestCase):
                 {
                     "id": "clippings-gallery",
                     "name": "Corebrain",
-                    "version": "0.4.0",
-                    "minAppVersion": "1.9.0",
+                    "version": "0.4.1",
+                    "minAppVersion": "1.11.4",
                 }
             ),
             encoding="utf-8",
         )
-        (root / "versions.json").write_text('{"0.4.0":"1.9.0"}\n', encoding="utf-8")
+        (root / "versions.json").write_text('{"0.4.0":"1.9.0","0.4.1":"1.11.4"}\n', encoding="utf-8")
         for name, value in {
             "main.js": "module.exports = {};\n",
             "styles.css": ".corebrain {}\n",
             "LICENSE": "MIT\n",
+            "window-lifecycle.js": "module.exports = {};\n",
         }.items():
             (root / name).write_text(value, encoding="utf-8")
 
         package = {
             "name": "corebrain-clipper",
-            "version": "1.8.0",
+            "version": "1.8.2",
             "homepage": "https://github.com/guilhermexp/Corebrain",
             "dependencies": {
                 "dayjs": "1.11.13",
@@ -74,7 +75,7 @@ class PackageReleaseTests(unittest.TestCase):
         manifest = {
             "manifest_version": 3,
             "name": "Corebrain Web Clipper",
-            "version": "1.8.0",
+            "version": "1.8.2",
             "homepage_url": "https://github.com/guilhermexp/Corebrain",
             "action": {"default_popup": "popup.html"},
             "icons": {"16": "icons/icon16.png"},
@@ -102,11 +103,20 @@ class PackageReleaseTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
+    def test_current_plugin_metadata_preserves_compatible_release_history(self) -> None:
+        root = SCRIPT.parent.parent
+        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        versions = json.loads((root / "versions.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["version"], "0.4.1")
+        self.assertEqual(manifest["minAppVersion"], "1.11.4")
+        self.assertEqual(versions["0.4.0"], "1.9.0")
+        self.assertEqual(versions["0.4.1"], manifest["minAppVersion"])
+
     def test_packages_are_allowlisted_and_have_stable_layout(self) -> None:
         artifacts = package_release.package_release(self.root, self.output)
 
-        plugin_zip = self.output / "Corebrain-plugin-0.4.0.zip"
-        extension_zip = self.output / "Corebrain-extension-chrome-1.8.0.zip"
+        plugin_zip = self.output / "Corebrain-plugin-0.4.1.zip"
+        extension_zip = self.output / "Corebrain-extension-chrome-1.8.2.zip"
         self.assertEqual({path.name for path in artifacts}, {plugin_zip.name, extension_zip.name})
 
         with zipfile.ZipFile(plugin_zip) as archive:
@@ -117,6 +127,7 @@ class PackageReleaseTests(unittest.TestCase):
                     "clippings-gallery/main.js",
                     "clippings-gallery/manifest.json",
                     "clippings-gallery/styles.css",
+                    "clippings-gallery/window-lifecycle.js",
                 ],
             )
             self.assertNotIn("clippings-gallery/data.json", archive.namelist())
@@ -149,14 +160,21 @@ class PackageReleaseTests(unittest.TestCase):
             sorted(
                 path.name for path in standalone.iterdir() if path.name in package_release.PLUGIN_FILES
             ),
-            ["LICENSE", "main.js", "manifest.json", "styles.css"],
+            ["LICENSE", "main.js", "manifest.json", "styles.css", "window-lifecycle.js"],
         )
         self.assertFalse((self.output / "plugin").exists())
+
+    def test_plugin_package_includes_window_lifecycle_module(self) -> None:
+        package_release.package_release(self.root, self.output)
+        plugin_zip = self.output / "Corebrain-plugin-0.4.1.zip"
+        with zipfile.ZipFile(plugin_zip) as archive:
+            self.assertIn("clippings-gallery/window-lifecycle.js", archive.namelist())
+        self.assertTrue((self.output / "window-lifecycle.js").is_file())
 
     def test_extension_notice_contains_full_production_dependency_licenses(self) -> None:
         package_release.package_release(self.root, self.output)
 
-        with zipfile.ZipFile(self.output / "Corebrain-extension-chrome-1.8.0.zip") as archive:
+        with zipfile.ZipFile(self.output / "Corebrain-extension-chrome-1.8.2.zip") as archive:
             notice = archive.read("THIRD_PARTY_NOTICES.txt").decode("utf-8")
 
         self.assertIn("dayjs@1.11.13", notice)
@@ -182,7 +200,7 @@ class PackageReleaseTests(unittest.TestCase):
 
         package_release.package_release(self.root, self.output)
 
-        with zipfile.ZipFile(self.output / "Corebrain-extension-chrome-1.8.0.zip") as archive:
+        with zipfile.ZipFile(self.output / "Corebrain-extension-chrome-1.8.2.zip") as archive:
             names = archive.namelist()
         self.assertFalse(any(name == "data.json" or name.endswith(".map") for name in names))
         self.assertFalse(any(name.startswith("node_modules/") for name in names))
@@ -212,7 +230,7 @@ class PackageReleaseTests(unittest.TestCase):
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
         package_release.package_release(self.root, self.output, include_firefox=True)
-        firefox_zip = self.output / "Corebrain-extension-firefox-development-1.8.0.zip"
+        firefox_zip = self.output / "Corebrain-extension-firefox-development-1.8.2.zip"
         self.assertTrue(firefox_zip.exists())
 
         package_release.package_release(self.root, self.output, include_firefox=False)

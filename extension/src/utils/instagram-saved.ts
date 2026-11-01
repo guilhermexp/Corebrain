@@ -8,7 +8,7 @@
  */
 
 import browser from './browser-polyfill';
-import { fetchBridge } from './bridge-settings';
+import { fetchBridge, BridgeUnverifiedError, BridgeProtocolError } from './bridge-settings';
 
 export interface InstagramSavedPost {
 	id: string;
@@ -41,7 +41,7 @@ export interface InstagramBridgeNote {
 }
 
 export type InstagramSearchProgress = (qtd: number, pagina: number) => void;
-export type InstagramImportProgress = (feitos: number, total: number) => void;
+export type InstagramImportProgress = (feitos: number, total: number, counts: Pick<InstagramTransportResult, 'criados' | 'pulados' | 'erros'>) => void;
 
 export const DEFAULT_INSTAGRAM_SAVED_FOLDER = 'Clippings';
 
@@ -540,7 +540,7 @@ export async function enviarSalvosInstagram(
 				if ([401, 403, 404].includes(response.status)) {
 					result.erros += posts.length - processed;
 					processed += chunk.length;
-					aoProgredir?.(processed, posts.length);
+					aoProgredir?.(processed, posts.length, { criados: result.criados, pulados: result.pulados, erros: result.erros });
 					break;
 				}
 				result.erros += chunk.length;
@@ -562,7 +562,15 @@ export async function enviarSalvosInstagram(
 					if (body.erros > 0) warnings.push(`A ponte Corebrain reportou ${body.erros} erro(s) no lote.`);
 				}
 			}
-		} catch {
+		} catch (error) {
+			if (error instanceof BridgeUnverifiedError || error instanceof BridgeProtocolError) {
+				warnings.push(error instanceof BridgeProtocolError
+					? 'Protocolo da ponte incompatível. Atualize o plugin Corebrain e a extensão.'
+					: 'Não foi possível verificar a ponte Corebrain. Confira o token de pareamento.');
+				result.erros += posts.length - processed;
+				aoProgredir?.(processed, posts.length, { criados: result.criados, pulados: result.pulados, erros: result.erros });
+				break;
+			}
 			warnings.push('Não foi possível enviar um lote à ponte Corebrain; tente sincronizar de novo para conferir os duplicados.');
 			result.erros += chunk.length;
 		} finally {
@@ -571,7 +579,7 @@ export async function enviarSalvosInstagram(
 		if (end === start) break;
 		processed += chunk.length;
 		end = start;
-		aoProgredir?.(processed, posts.length);
+		aoProgredir?.(processed, posts.length, { criados: result.criados, pulados: result.pulados, erros: result.erros });
 	}
 
 	if (warnings.length) result.avisos = warnings;

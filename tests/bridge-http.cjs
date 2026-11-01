@@ -15,6 +15,7 @@ function loadPluginModule() {
     ItemView: class {},
     Notice: class { constructor() {} setMessage() {} hide() {} },
     requestUrl: async () => ({ text: '' }),
+    parseYaml: require('yaml').parse,
     PluginSettingTab: class {},
     Setting: class {},
     setIcon() {},
@@ -69,7 +70,8 @@ function createVault() {
 function makePlugin(port) {
   const vault = createVault();
   const plugin = {
-    cfg: { porta: port, ponteToken: 'a'.repeat(64), pastaBookmarks: 'Clippings' },
+    cfg: { porta: port, pastaBookmarks: 'Clippings' },
+    ponteToken: 'a'.repeat(64),
     pastas: ['Clippings/'],
     app: {
       vault,
@@ -150,7 +152,7 @@ test('requires a valid bearer token for ping, including extension origins', asyn
 
   const ok = await request(state.port, '/ping', { headers: extensionHeaders() });
   assert.equal(ok.status, 200);
-  assert.equal(ok.json.protocol, 1);
+  assert.equal(ok.json.protocol, 2);
   assert.equal(ok.headers['access-control-allow-origin'], 'chrome-extension://abcdefghijklmnop');
 });
 
@@ -183,6 +185,39 @@ test('preflight allowlists extension origins and authorization', async () => {
 
   const evil = await request(state.port, '/ping', { method: 'OPTIONS', headers: { origin: 'https://evil.example' } });
   assert.equal(evil.status, 403);
+});
+
+test('E5 Safari origin can preflight and authenticate', async () => {
+  const origin = 'safari-web-extension://example-id';
+  const preflight = await request(state.port, '/ping', { method: 'OPTIONS', headers: { origin } });
+  assert.equal(preflight.status, 204);
+  const ping = await request(state.port, '/ping', { headers: { ...auth(), origin } });
+  assert.equal(ping.status, 200);
+  assert.equal(ping.headers['access-control-allow-origin'], origin);
+});
+
+test('E6 challenge proves token possession without exposing bearer', async () => {
+  const nonce = '0'.repeat(64);
+  const expected = require('node:crypto').createHmac('sha256', 'a'.repeat(64))
+    .update('corebrain-ponte-prova:v1:' + nonce).digest('hex');
+  const proof = await request(state.port, `/prova?nonce=${nonce}`);
+  assert.equal(proof.status, 200);
+  assert.deepEqual(proof.json, { plugin: 'clippings-gallery', protocol: 2, prova: expected });
+  for (const query of ['', '?nonce=ABC', `?nonce=${'A'.repeat(64)}`]) {
+    assert.equal((await request(state.port, '/prova' + query)).status, 400);
+  }
+  assert.equal((await request(state.port, `/prova?nonce=${nonce}`, { headers: { origin: 'https://evil.example' } })).status, 403);
+  assert.equal((await request(state.port, '/ping')).status, 401);
+});
+
+test('P8 clip names remain valid after sanitizing and on Windows', async () => {
+  for (const [nome, expected] of [['^', /^Clippings\/Clipping \d{4}-\d\d-\d\d \d{6}\.md$/], ['CON', /^Clippings\/CON _\.md$/], ['CON.txt', /^Clippings\/CON _\.txt\.md$/], ['NUL .txt', /^Clippings\/NUL _ \.txt\.md$/]]) {
+    const result = await request(state.port, '/clip', {
+      method: 'POST', headers: { ...auth(), 'content-type': 'application/json' },
+    }, { nome, conteudo: 'body' });
+    assert.equal(result.status, 200);
+    assert.match(result.json.caminho, expected);
+  }
 });
 
 test('validates clip and bookmark paths before touching the vault', async () => {

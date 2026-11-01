@@ -53,3 +53,29 @@ A detecção de duplicata MUST obter o `source` de nível superior do frontmatte
 #### Scenario: Source com comentário
 - **WHEN** existe nota com source `https://example.com/page` e chega um clip com `source: "https://example.com/page" # original URL`
 - **THEN** a ponte responde duplicata e não cria nova nota
+
+### Requirement: Receber capturas com o vault oculto
+No macOS, fechar a janela principal do vault com Corebrain ativo MUST ocultá-la sem descarregar o plugin nem encerrar a ponte. Capturas recebidas nesse estado MUST ser gravadas sem mostrar janela, abrir nota ou abrir a galeria. Escolher Sair do Obsidian MUST continuar encerrando o aplicativo, e descarregar o plugin MUST remover os handlers de ciclo de vida que ele instalou.
+
+#### Scenario: Captura depois de fechar a janela
+- **WHEN** o usuário fecha a janela do vault e salva uma página pela extensão com Obsidian ainda rodando
+- **THEN** o arquivo é gravado no vault, a extensão recebe a confirmação e nenhuma janela ou nota é aberta
+
+#### Scenario: Encerramento explícito
+- **WHEN** o usuário escolhe Sair do Obsidian
+- **THEN** a retenção em segundo plano não impede o encerramento nem deixa a ponte órfã
+
+### Requirement: Confirmação de gravação sem fallback que abre o aplicativo
+Adicionar uma página MUST NOT despachar `obsidian://` automaticamente quando a ponte não responde. A extensão MUST confirmar sucesso somente após resposta válida da ponte com o caminho gravado; falha ou ausência de confirmação MUST manter o conteúdo capturado disponível e apresentar erro recuperável, sem afirmar que salvou.
+
+#### Scenario: Ponte indisponível
+- **WHEN** o usuário salva uma página e não há ponte disponível
+- **THEN** o popup mantém a captura, informa que não houve confirmação e não abre o Obsidian
+
+#### Scenario: Resposta inválida
+- **WHEN** o endpoint retorna 200 sem `ok: true` ou sem caminho de arquivo válido
+- **THEN** a extensão não registra sucesso nem fecha o popup como se tivesse gravado
+
+#### Scenario: Salvar página com modelo diário herdado
+- **WHEN** o usuário abre a extensão instalada pelo ícone no Aside e clica em Salvar página atual numa página do YouTube, mesmo com modelo diário previamente configurado
+- **THEN** a extensão salva um clipping no vault já configurado e confirma o arquivo sem abrir nota ou galeria, sem exigir troca de modelo e sem usar vault ou perfil de teste
