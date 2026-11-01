@@ -1,5 +1,18 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
+import { createHmac } from 'node:crypto';
+import browser from './browser-polyfill';
 import { jaNaGaleria } from './x-bookmarks';
+
+function stubBridgeFetch(handler: (url: string, init: RequestInit) => unknown) {
+	vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+		if (url.includes('/prova?')) {
+			const nonce = new URL(url).searchParams.get('nonce');
+			const prova = createHmac('sha256', 'test-token').update(`corebrain-ponte-prova:v1:${nonce}`).digest('hex');
+			return { ok: true, status: 200, json: async () => ({ plugin: 'clippings-gallery', protocol: 2, prova }) };
+		}
+		return handler(url, init);
+	});
+}
 
 /**
  * Clipping normal nao passa pela ponte: ele so cria a nota. Sem esta consulta,
@@ -7,10 +20,13 @@ import { jaNaGaleria } from './x-bookmarks';
  * produziu 5 duplicatas de repositorio do GitHub no vault.
  */
 describe('jaNaGaleria', () => {
-	beforeEach(() => vi.restoreAllMocks());
+	beforeEach(() => {
+		vi.restoreAllMocks();
+		vi.spyOn(browser.storage.local, 'get').mockResolvedValue({ corebrain_bridge_token: 'test-token' });
+	});
 
 	test('reconhece URL que ja esta na galeria', async () => {
-		vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+		stubBridgeFetch(vi.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({ existe: true, caminho: 'Clippings/x.md' }),
 		}));
@@ -18,7 +34,7 @@ describe('jaNaGaleria', () => {
 	});
 
 	test('URL nova passa', async () => {
-		vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+		stubBridgeFetch(vi.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({ existe: false, caminho: null }),
 		}));
@@ -27,7 +43,7 @@ describe('jaNaGaleria', () => {
 
 	test('manda a URL codificada, senao ? e & do link viram query da ponte', async () => {
 		const f = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ existe: false }) });
-		vi.stubGlobal('fetch', f);
+		stubBridgeFetch(f);
 		await jaNaGaleria('https://a.dev/p?x=1&y=2');
 		expect(f.mock.calls[0][0]).toContain(encodeURIComponent('https://a.dev/p?x=1&y=2'));
 	});
@@ -40,12 +56,12 @@ describe('jaNaGaleria', () => {
 	});
 
 	test('resposta de erro HTTP tambem devolve null', async () => {
-		vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }));
+		stubBridgeFetch(vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }));
 		expect(await jaNaGaleria('https://a.dev')).toBeNull();
 	});
 
 	test('resposta sem os campos esperados nao inventa caminho', async () => {
-		vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ existe: 1 }) }));
+		stubBridgeFetch(vi.fn().mockResolvedValue({ ok: true, json: async () => ({ existe: 1 }) }));
 		expect(await jaNaGaleria('https://a.dev')).toEqual({ existe: true, caminho: null });
 	});
 

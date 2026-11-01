@@ -62,9 +62,9 @@ export function initXSync(): void {
 		mostrar('Verificando sessão do X…');
 
 		try {
-			const st: any = await browser.runtime.sendMessage({ action: 'x-bookmarks-status' });
+			const st = await browser.runtime.sendMessage({ action: 'x-bookmarks-status' }) as { logado?: boolean; error?: string } | undefined;
 			if (!st?.logado) {
-				mostrar('Faça login em x.com para sincronizar.', 0, true);
+				mostrar(st?.error || 'Faça login em x.com para sincronizar.', 0, true);
 				esconder(6000);
 				return;
 			}

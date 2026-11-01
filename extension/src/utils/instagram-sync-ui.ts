@@ -32,7 +32,7 @@ export function formatInstagramSyncStatus(status: InstagramSyncStatus): string {
 			return `${prefixo}Buscando salvos no Instagram… página ${status.pages} · ${status.found} encontrados`;
 		}
 		if (status.phase === 'saving') {
-			return `${prefixo}Importando ${status.total} salvos… ${status.processed} de ${status.total}`;
+			return `${prefixo}Gravando ${status.processed} de ${status.total}… ${contagens(status)}`;
 		}
 		return `${prefixo}Importando salvos do Instagram…`;
 	}
@@ -187,10 +187,52 @@ export function initInstagramSync(): void {
 	let lastStatus: InstagramSyncStatus | undefined;
 	let startPendente = false;
 	let interacao = 0;
+	let timerResultado: number | undefined;
+	const limparTimerResultado = (): void => {
+		if (timerResultado !== undefined) window.clearTimeout(timerResultado);
+		timerResultado = undefined;
+	};
+	const restaurarInicial = (): void => {
+		const caixa = el('instagram-sync-status');
+		caixa?.classList.add('is-hidden');
+		caixa?.classList.remove('esta-sincronizando', 'tem-erro');
+		const texto = el('instagram-sync-texto');
+		if (texto) {
+			texto.textContent = '';
+			texto.removeAttribute('title');
+		}
+		const barra = el('instagram-sync-progresso');
+		barra?.classList.remove('indeterminado');
+		if (barra) barra.style.width = '0%';
+		botao.classList.remove('esta-sincronizando');
+		botao.setAttribute('aria-disabled', 'false');
+		el('instagram-sync-cancelar')?.classList.add('is-hidden');
+	};
+	const mostrarErroLocal = (texto: string): void => {
+		limparTimerResultado();
+		mostrarErro(texto, lastStatus, startPendente);
+		if (lastStatus?.running) return;
+		const revisao = interacao;
+		const status = lastStatus;
+		timerResultado = window.setTimeout(() => {
+			if (interacao === revisao && lastStatus === status && !startPendente && !lastStatus?.running) restaurarInicial();
+		}, 8_000);
+	};
+	window.addEventListener('unload', limparTimerResultado, { once: true });
 	const renderSeMaisNovo = (status: InstagramSyncStatus): void => {
 		if (!statusMaisRecente(status, lastStatus)) return;
+		limparTimerResultado();
 		lastStatus = status;
+		if (!status.running && status.phase !== 'idle') startPendente = false;
 		render(status, startPendente);
+		if (!status.running && status.phase !== 'idle') {
+			const prazo = ['complete', 'cancelled'].includes(status.phase) ? 4_000 : 8_000;
+			const restante = prazo - Math.max(0, Date.now() - status.updatedAt);
+			if (restante <= 0) restaurarInicial();
+			else timerResultado = window.setTimeout(() => {
+				if (lastStatus === status && !startPendente) restaurarInicial();
+			}, restante);
+		}
 	};
 
 	browser.runtime.onMessage.addListener((message: unknown): undefined => {
@@ -207,13 +249,13 @@ export function initInstagramSync(): void {
 			const result: unknown = await sendMessageComPrazo({ action: 'instagram-saved-cancel' });
 			if (!respostaDeCancelamentoValida(result)) {
 				if (recebeuProgresso()) return;
-				mostrarErro('A extensão não recebeu uma resposta válida ao cancelar a importação.', lastStatus, startPendente);
+				mostrarErroLocal('A extensão não recebeu uma resposta válida ao cancelar a importação.');
 				return;
 			}
 			if (result.status) renderSeMaisNovo(result.status);
-			if (!result.ok && (!recebeuProgresso() || lastStatus === result.status)) mostrarErro(result.error || 'Não foi possível cancelar a importação.', lastStatus, startPendente);
+			if (!result.ok && (!recebeuProgresso() || lastStatus === result.status)) mostrarErroLocal(result.error || 'Não foi possível cancelar a importação.');
 		} catch (error) {
-			if (!recebeuProgresso()) mostrarErro(mensagemErro(error), lastStatus, startPendente);
+			if (!recebeuProgresso()) mostrarErroLocal(mensagemErro(error));
 		}
 	});
 
@@ -223,7 +265,8 @@ export function initInstagramSync(): void {
 		startPendente = true;
 		const statusAntes = lastStatus;
 		const recebeuProgresso = () => lastStatus !== statusAntes && lastStatus?.phase !== 'idle';
-		interacao++;
+		const revisaoInicio = ++interacao;
+		limparTimerResultado();
 		caixaInicio();
 		try {
 			const sourceTabId = panelSourceTabId(window.location.search);
@@ -233,22 +276,23 @@ export function initInstagramSync(): void {
 				const erro = isRecord(result) && typeof result.error === 'string'
 					? result.error
 					: 'A extensão não recebeu uma resposta válida ao iniciar a importação.';
-				mostrarErro(erro, lastStatus, true);
+				mostrarErroLocal(erro);
 				return;
 			}
 			renderSeMaisNovo(result.status);
 			if (!result.success && !result.status.running && lastStatus === result.status) {
-				mostrarErro(result.error || 'Não foi possível iniciar a importação.', lastStatus, true);
+				mostrarErroLocal(result.error || 'Não foi possível iniciar a importação.');
 			}
 		} catch (error) {
-			if (!recebeuProgresso()) mostrarErro(mensagemErro(error), lastStatus, true);
+			if (!recebeuProgresso()) mostrarErroLocal(mensagemErro(error));
 		} finally {
-			startPendente = false;
-			// Unlock only: repainting an old idle/terminal snapshot here would
-			// erase the start error or timeout that was just displayed.
-			const running = lastStatus?.running === true;
-			botao?.classList.toggle('esta-sincronizando', running);
-			botao?.setAttribute('aria-disabled', String(running));
+			if (revisaoInicio === interacao) {
+				startPendente = false;
+				// Unlock only: repainting an old snapshot could erase a newer result.
+				const running = lastStatus?.running === true;
+				botao.classList.toggle('esta-sincronizando', running);
+				botao.setAttribute('aria-disabled', String(running));
+			}
 		}
 	});
 

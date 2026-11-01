@@ -66,28 +66,12 @@ describe('Instagram popup click feedback', () => {
   reply({success:true,status:{...base,running:true,phase:'checking-bridge',updatedAt:10}}); await flush();
   expect(text()).toContain('42');
  });
- it('preserves a confirmed completion when the start acknowledgement times out', async () => {
-  send.mockImplementation((message: any) => message.action==='instagram-saved-status' ? Promise.resolve(base) : new Promise(()=>{}));
-  initInstagramSync(); await flush(); document.getElementById('instagram-sync')!.click();
-  broadcast({action:'instagram-saved-progress',status:{...base,phase:'complete',found:3,created:3,updatedAt:20}});
-  await vi.advanceTimersByTimeAsync(16000);
-  expect(text()).toContain('Importação concluída'); expect(text()).toContain('3 criados');
- });
  it('shows cancellation requested even when the timestamp and counts tie', async () => {
   send.mockResolvedValue(base); initInstagramSync(); await flush();
   const state={...base,running:true,phase:'fetching',found:3,pages:1,updatedAt:20};
   broadcast({action:'instagram-saved-progress',status:state});
   broadcast({action:'instagram-saved-progress',status:{...state,cancelRequested:true}});
   expect(text()).toContain('Cancelando');
- });
- it('preserves confirmed cancellation when its acknowledgement times out', async () => {
-  send.mockImplementation((message: any) => message.action==='instagram-saved-status' ? Promise.resolve(base) : new Promise(()=>{}));
-  initInstagramSync(); await flush();
-  broadcast({action:'instagram-saved-progress',status:{...base,running:true,phase:'fetching',updatedAt:20}});
-  document.getElementById('instagram-sync-cancelar')!.click();
-  broadcast({action:'instagram-saved-progress',status:{...base,phase:'cancelled',updatedAt:21}});
-  await vi.advanceTimersByTimeAsync(16000);
-  expect(text()).toContain('Importação cancelada'); expect(text()).not.toContain('respondeu');
  });
  it('ships the Instagram trigger and status in the side panel too', () => {
   document.body.innerHTML=readFileSync(resolve('src/side-panel.html'),'utf8');

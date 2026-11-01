@@ -448,7 +448,7 @@ browser.runtime.onMessage.addListener((request: unknown, sender: browser.Runtime
 		// perde o foco e mataria a paginacao no meio.
 		if (typedRequest.action === 'x-bookmarks-status') {
 			estaLogadoNoX()
-				.then((logado) => sendResponse({ logado }))
+				.then((status) => sendResponse(status))
 				.catch((e) => sendResponse({ logado: false, error: (e as Error).message }));
 			return true;
 		}
@@ -495,8 +495,23 @@ browser.runtime.onMessage.addListener((request: unknown, sender: browser.Runtime
 					// O sync em lote depende do plugin para deduplicar URLs. Nunca grave
 					// por obsidian:// como fallback: isso abre o app por bookmark e cria
 					// cópias sem a checagem da galeria.
-					const p = await enviarPelaPonte(r.novos, pasta);
-					const res = { salvos: p.criados, pulados: p.pulados, erros: p.erros };
+					// O plugin grava cada lote do mais antigo ao mais recente;
+					// envie primeiro os lotes do fim para preservar a ordem global.
+					const res = { salvos: 0, pulados: 0, erros: 0 };
+					for (let end = r.novos.length; end > 0; end -= 100) {
+						if (xSyncCancelado) break;
+						const start = Math.max(0, end - 100);
+						const p = await enviarPelaPonte(r.novos.slice(start, end), pasta);
+						res.salvos += p.criados;
+						res.pulados += p.pulados;
+						res.erros += p.erros;
+						browser.runtime.sendMessage({
+							action: 'x-bookmarks-saving', feitos: r.novos.length - start,
+							total: r.novos.length, viaPlugin: true,
+						}).catch(() => {});
+						if (p.erros > 0) break;
+					}
+					if (xSyncCancelado) return sendResponse({ success: true, ...res, cancelado: true });
 
 					// Advance only when every fetched bookmark was either created or
 					// already present. Partial failures must remain pending next run.
@@ -698,20 +713,20 @@ browser.runtime.onMessage.addListener((request: unknown, sender: browser.Runtime
 		}
 
 		if (typedRequest.action === "getActiveTabAndToggleIframe") {
-			browser.tabs.query({active: true, currentWindow: true}).then(async (tabs) => {
-				const currentTab = tabs[0];
-				if (currentTab && currentTab.id) {
-					try {
-						await routeMessageToTab(currentTab.id, { action: "toggle-iframe" });
-						sendResponse({success: true});
-					} catch (error) {
-						console.error('Error sending toggle-iframe message:', error);
-						sendResponse({success: false, error: error instanceof Error ? error.message : String(error)});
+			(async () => {
+				try {
+					const tabId = typedRequest.tabId ?? (await browser.tabs.query({ active: true, currentWindow: true }))[0]?.id;
+					if (tabId === undefined) {
+						sendResponse({ success: false, error: 'No active tab found' });
+						return;
 					}
-				} else {
-					sendResponse({success: false, error: 'No active tab found'});
+					await routeMessageToTab(tabId, { action: "toggle-iframe" });
+					sendResponse({ success: true });
+				} catch (error) {
+					console.error('Error sending toggle-iframe message:', error);
+					sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) });
 				}
-			});
+			})();
 			return true;
 		}
 
@@ -731,6 +746,12 @@ browser.runtime.onMessage.addListener((request: unknown, sender: browser.Runtime
 		}
 
 		if (typedRequest.action === "getActiveTab") {
+			// An embedded extension frame belongs to the host tab even while an
+			// independent extension window is the currently focused window.
+			if (sender.frameId !== undefined && sender.frameId !== 0 && sender.tab?.id !== undefined) {
+				sendResponse({ tabId: sender.tab.id });
+				return true;
+			}
 			browser.tabs.query({active: true, currentWindow: true}).then(async (tabs) => {
 				let currentTab = tabs[0];
 				// Fallback for when currentWindow has no tabs (e.g., debugging popup in DevTools)

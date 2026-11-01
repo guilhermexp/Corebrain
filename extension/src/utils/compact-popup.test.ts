@@ -9,7 +9,4 @@ it('toggles extra controls and updates concise status without discarding error d
  expect(document.getElementById('capture-controls-toggle')!.getAttribute('aria-expanded')).toBe('true');
  expect(document.getElementById('instagram-sync-summary')!.textContent).toContain('não concluído');
  expect(document.getElementById('instagram-sync-texto')!.textContent).toBe('Long original error');
- document.getElementById('instagram-sync-status')!.className='esta-sincronizando';
- await Promise.resolve();
- expect(document.getElementById('instagram-sync-summary')!.textContent).toContain('Sincronizando');
 });

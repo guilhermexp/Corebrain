@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { createHmac } from 'node:crypto';
 const { mockBrowser } = vi.hoisted(() => ({
 	mockBrowser: {
 		tabs: { query: vi.fn(), get: vi.fn() },
@@ -46,6 +47,17 @@ const post = (id: string): InstagramSavedPost => ({
 	criadoEm: '2026-05-28T00:00:00.000Z',
 	midia: [`https://scontent.cdninstagram.com/${id}.jpg`],
 });
+
+function stubBridgeFetch(handler: (url: string, init: RequestInit) => unknown) {
+	vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+		if (url.includes('/prova?')) {
+			const nonce = new URL(url).searchParams.get('nonce');
+			const prova = createHmac('sha256', 'paired-token').update(`corebrain-ponte-prova:v1:${nonce}`).digest('hex');
+			return { ok: true, status: 200, json: async () => ({ plugin: 'clippings-gallery', protocol: 2, prova }) };
+		}
+		return handler(url, init);
+	});
+}
 
 const executeScript = mockBrowser.scripting.executeScript;
 let pages: unknown[];
@@ -214,9 +226,20 @@ describe('instagramParaNota', () => {
 });
 
 describe('enviarSalvosInstagram', () => {
+	test('stops importing and reports an unverified bridge without sending posts', async () => {
+		const fetcher = vi.fn(async () => ({
+			ok: true, status: 200, json: async () => ({ plugin: 'clippings-gallery', protocol: 2, prova: 'wrong' }),
+		}));
+		vi.stubGlobal('fetch', fetcher);
+		const result = await enviarSalvosInstagram(Array.from({ length: 201 }, (_, i) => post(`ID_${i}`)));
+		expect(result.erros).toBe(201);
+		expect(result.avisos?.join(' ')).toMatch(/verific/i);
+		expect(fetcher).toHaveBeenCalledTimes(1);
+	});
+
 	test('sends oldest chunks first, keeps each chunk newest-first, and uses the authenticated Instagram route', async () => {
 		const batches: any[] = [];
-		vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+		stubBridgeFetch(vi.fn(async (url: string, init: RequestInit) => {
 			batches.push({ url, body: JSON.parse(String(init.body)), authorization: new Headers(init.headers).get('Authorization') });
 			const count = JSON.parse(String(init.body)).bookmarks.length;
 			return { ok: true, status: 200, json: async () => ({ criados: count, pulados: 0, erros: 0 }) } as Response;
@@ -239,7 +262,7 @@ describe('enviarSalvosInstagram', () => {
 
 	test('makes cancellation and malformed bridge counts visible as partial results', async () => {
 		let calls = 0;
-		vi.stubGlobal('fetch', vi.fn(async () => {
+		stubBridgeFetch(vi.fn(async () => {
 			calls++;
 			return { ok: true, status: 200, json: async () => ({ criados: 100, pulados: 0, erros: 0 }) } as Response;
 		}));
@@ -249,7 +272,7 @@ describe('enviarSalvosInstagram', () => {
 		expect(result.avisos?.join(' ')).toMatch(/101/);
 		expect(calls).toBe(1);
 
-		vi.stubGlobal('fetch', vi.fn(async () => ({
+		stubBridgeFetch(vi.fn(async () => ({
 			ok: true,
 			status: 200,
 			json: async () => ({ criados: 2, pulados: 0, erros: 0 }),
@@ -261,7 +284,7 @@ describe('enviarSalvosInstagram', () => {
 
 	test('records a failed chunk and continues other independent chunks', async () => {
 		let call = 0;
-		vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+		stubBridgeFetch(vi.fn(async (_url: string, init: RequestInit) => {
 			call++;
 			const size = JSON.parse(String(init.body)).bookmarks.length;
 			if (call === 1) return { ok: false, status: 500, json: async () => ({}) } as Response;
@@ -274,7 +297,7 @@ describe('enviarSalvosInstagram', () => {
 	});
 
 	test('propagates safe plugin warnings and updates for an unsupported route', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => ({
+		stubBridgeFetch(vi.fn(async () => ({
 			ok: true,
 			status: 200,
 			json: async () => ({ criados: 1, pulados: 0, erros: 0, avisos: ['Capa indisponível'] }),
@@ -282,7 +305,7 @@ describe('enviarSalvosInstagram', () => {
 		const covered = await enviarSalvosInstagram([post('COVER')]);
 		expect(covered).toMatchObject({ criados: 1, avisos: ['Capa indisponível'] });
 
-		vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 404, json: async () => ({}) } as Response)));
+		stubBridgeFetch(vi.fn(async () => ({ ok: false, status: 404, json: async () => ({}) } as Response)));
 		const outdatedPlugin = await enviarSalvosInstagram([post('OLD_PLUGIN')]);
 		expect(outdatedPlugin.erros).toBe(1);
 		expect(outdatedPlugin.avisos?.join(' ')).toMatch(/atualize.*plugin Corebrain/i);
@@ -294,7 +317,7 @@ describe('enviarSalvosInstagram', () => {
 			const fetcher = vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
 				init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
 			}));
-			vi.stubGlobal('fetch', fetcher);
+			stubBridgeFetch(fetcher);
 			const pending = enviarSalvosInstagram([post('SLOW')]);
 			await vi.waitFor(() => expect(fetcher).toHaveBeenCalled());
 			await vi.advanceTimersByTimeAsync(20_000);

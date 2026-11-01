@@ -42,7 +42,7 @@ export interface InstagramSyncControllerDependencies {
 	sendSaved: (
 		posts: InstagramSavedPost[],
 		folder: string,
-		onProgress: (finished: number, total: number) => void,
+		onProgress: (finished: number, total: number, counts: Pick<InstagramTransportResult, 'criados' | 'pulados' | 'erros'>) => void,
 		shouldCancel: () => boolean,
 	) => Promise<InstagramTransportResult>;
 	getFolder: () => Promise<string>;
@@ -202,9 +202,12 @@ export function createInstagramSyncController(deps: InstagramSyncControllerDepen
 			if (feed.novos.length > 0) {
 				await update({ phase: 'saving' });
 				const folder = await deps.getFolder();
-				const result = await deps.sendSaved(feed.novos, folder, (finished, total) => {
+				const result = await deps.sendSaved(feed.novos, folder, (finished, total, counts) => {
 					status.processed = Math.max(status.processed, finished);
 					status.total = Math.max(status.total, total);
+					status.created = counts.criados;
+					status.skipped = counts.pulados;
+					status.errors = counts.erros;
 					void persistAndPublish();
 				}, shouldCancel);
 				const warnings = result.avisos ? [...result.avisos] : [];

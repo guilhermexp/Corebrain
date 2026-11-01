@@ -4,7 +4,7 @@ import { closeFloatingPanel, initFloatingPanel } from '../utils/floating-panel-c
 import dayjs from 'dayjs';
 import { Template, Property, PromptVariable } from '../types/types';
 import { incrementStat, addHistoryEntry, getClipHistory } from '../utils/storage-utils';
-import { generateFrontmatter, saveToObsidian } from '../utils/obsidian-note-creator';
+import { generateFrontmatter } from '../utils/obsidian-note-creator';
 import { extractPageContent, initializePageContent } from '../utils/content-extractor';
 import { compileTemplate } from '../utils/template-compiler';
 import { initializeIcons, getPropertyTypeIcon } from '../icons/icons';
@@ -29,6 +29,7 @@ import { formatPropertyValue } from '../utils/shared';
 import { initXSync } from '../utils/x-sync-ui';
 import { initInstagramSync } from '../utils/instagram-sync-ui';
 import { jaNaGaleria, clipPelaPonte, BridgeAuthenticationError } from '../utils/x-bookmarks';
+import { BridgeUnverifiedError, BridgeProtocolError } from '../utils/bridge-settings';
 
 interface ReaderModeResponse {
 	success: boolean;
@@ -103,10 +104,10 @@ function esconderAvisoDuplicata(): void {
  * gente SEGUE: travar o clip porque a checagem falhou seria pior que a
  * duplicata que ela evita.
  */
-async function passouNaChecagemDeDuplicata(): Promise<boolean> {
+async function passouNaChecagemDeDuplicata(signal?: AbortSignal): Promise<boolean> {
 	if (duplicataConfirmada) return true;
 	const url = currentTabId ? (await getTabInfo(currentTabId)).url || '' : '';
-	const dup = await jaNaGaleria(url);
+	const dup = await jaNaGaleria(url, signal);
 	if (!dup?.existe) {
 		esconderAvisoDuplicata();
 		return true;
@@ -290,8 +291,8 @@ function setupMessageListeners() {
 	browser.runtime.onMessage.addListener((request: any, sender: browser.Runtime.MessageSender, sendResponse: (response?: any) => void) => {
 		if (request.action === "triggerQuickClip") {
 			if (request.tabId !== currentTabId) return;
-			handleClipObsidian().then(() => {
-				sendResponse({success: true});
+			handleClipObsidian().then((success) => {
+				sendResponse({success});
 			}).catch((error) => {
 				console.error('Error in handleClipObsidian:', error);
 				sendResponse({success: false, error: error.message});
@@ -373,7 +374,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 		// Check if we should open in an iframe, but only if the URL is valid
 		if (isValidUrl(tab.url) && !isBlankPage(tab.url) && openBehavior === 'embedded' && !isIframe && !isIndependentPanel && !isSidePanel) {
 			try {
-				const response = await browser.runtime.sendMessage({ action: "getActiveTabAndToggleIframe" }) as { success?: boolean; error?: string };
+				const response = await browser.runtime.sendMessage({ action: "getActiveTabAndToggleIframe", tabId: currentTabId }) as { success?: boolean; error?: string };
 				if (response && response.success) {
 					closePopupSurface();
 					return; // Exit script after closing the window
@@ -508,7 +509,7 @@ function setupEventListeners(tabId: number) {
 		if (embeddedModeButton) {
 			embeddedModeButton.addEventListener('click', async function() {
 				try {
-					await browser.runtime.sendMessage({ action: "getActiveTabAndToggleIframe" });
+					await browser.runtime.sendMessage({ action: "getActiveTabAndToggleIframe", tabId });
 					setTimeout(closePopupSurface, 50);
 				} catch (error) {
 					console.error('Error toggling emedded iframe:', error);
@@ -1422,31 +1423,52 @@ function determineMainAction() {
 	}
 }
 
-async function handleClipObsidian(): Promise<void> {
-	if (!currentTemplate) return;
+let clipEmAndamento = false;
 
-	const vaultDropdown = document.getElementById('vault-select') as HTMLSelectElement;
-	const noteContentField = document.getElementById('note-content-field') as HTMLTextAreaElement;
-	const noteNameField = document.getElementById('note-name-field') as HTMLInputElement;
-	const pathField = document.getElementById('path-name-field') as HTMLInputElement;
-	const interpretBtn = document.getElementById('interpret-btn') as HTMLButtonElement;
+async function comTempoLimiteDaPonte<T>(operacao: (signal: AbortSignal) => Promise<T>): Promise<T> {
+	const controller = new AbortController();
+	let timer: number | undefined;
+	try {
+		return await Promise.race([
+			operacao(controller.signal),
+			new Promise<never>((_, reject) => {
+				timer = window.setTimeout(() => {
+					controller.abort();
+					reject(new Error('A ponte demorou para responder. Confira o Corebrain e tente novamente.'));
+				}, 20_000);
+			}),
+		]);
+	} finally {
+		window.clearTimeout(timer);
+	}
+}
 
+function mostrarErroDeCaptura(message: string): void {
+	const errorMessage = document.querySelector('.error-message') as HTMLElement | null;
+	if (errorMessage) {
+		errorMessage.textContent = message;
+		errorMessage.style.display = 'flex';
+	}
+}
+
+async function handleClipObsidian(): Promise<boolean> {
+	if (!currentTemplate || clipEmAndamento) return false;
+	const vaultDropdown = document.getElementById('vault-select') as HTMLSelectElement | null;
+	const noteContentField = document.getElementById('note-content-field') as HTMLTextAreaElement | null;
+	const noteNameField = document.getElementById('note-name-field') as HTMLInputElement | null;
+	const pathField = document.getElementById('path-name-field') as HTMLInputElement | null;
+	const interpretBtn = document.getElementById('interpret-btn') as HTMLButtonElement | null;
 	if (!vaultDropdown || !noteContentField) {
-		showError('Some required fields are missing. Please try reloading the extension.');
-		return;
+		mostrarErroDeCaptura('Não foi possível preparar a captura. Recarregue a extensão e tente novamente.');
+		return false;
 	}
 
-	// antes de qualquer trabalho: essa URL ja esta na galeria? Auth failure is
-	// actionable pairing feedback, not permission to fall back to obsidian://.
+	clipEmAndamento = true;
+	const botao = document.getElementById('clip-btn');
+	botao?.classList.add('clipping');
+	clearError();
 	try {
-		if (!(await passouNaChecagemDeDuplicata())) return;
-	} catch (error) {
-		showError(error instanceof BridgeAuthenticationError ? error.message : 'failedToSaveFile');
-		return;
-	}
-
-	try {
-		// Handle interpreter if needed
+		if (!(await comTempoLimiteDaPonte(passouNaChecagemDeDuplicata))) return false;
 		if (generalSettings.interpreterEnabled && interpretBtn && collectPromptVariables(currentTemplate).length > 0) {
 			if (interpretBtn.classList.contains('processing')) {
 				await waitForInterpreter(interpretBtn);
@@ -1456,41 +1478,31 @@ async function handleClipObsidian(): Promise<void> {
 			}
 		}
 
-		// Gather content
-		const properties = getPropertiesFromDOM();
-
-		const frontmatter = await generateFrontmatter(properties);
+		const frontmatter = await generateFrontmatter(getPropertiesFromDOM());
 		const fileContent = frontmatter + noteContentField.value;
-
-		// Save to Obsidian
 		const selectedVault = vaultDropdown.value || currentTemplate.vault || '';
-		const isDailyNote = currentTemplate.behavior === 'append-daily' || currentTemplate.behavior === 'prepend-daily';
-		const noteName = isDailyNote ? '' : noteNameField?.value || '';
-		const path = isDailyNote ? '' : pathField?.value || '';
+		const noteName = noteNameField?.value || '';
+		const path = pathField?.value || '';
+		await comTempoLimiteDaPonte((signal) => clipPelaPonte(fileContent, noteName, path, signal));
 
-		// Primeiro a ponte: escreve a nota sem ativar o Obsidian nem abrir a nota,
-		// entao voce continua na pagina que estava lendo. Se ela nao responder
-		// (Obsidian fechado, plugin desligado), cai no `obsidian://` de sempre.
-		const botao = document.getElementById('clip-btn');
-		botao?.classList.add('clipping');
-		const pelaPonte = isDailyNote ? null : await clipPelaPonte(fileContent, noteName, path);
-		botao?.classList.remove('clipping');
-		if (!pelaPonte) {
-			await saveToObsidian(fileContent, noteName, path, selectedVault, currentTemplate.behavior);
-		}
 		const tabInfo = await getCurrentTabInfo();
 		await incrementStat('addToObsidian', selectedVault, path, tabInfo.url, tabInfo.title);
-
 		lastSelectedVault = selectedVault;
 		await setLocalStorage('lastSelectedVault', lastSelectedVault);
-
-		if (!isSidePanel) {
-			setTimeout(closePopupSurface, 500);
-		}
+		if (!isSidePanel) setTimeout(closePopupSurface, 500);
+		return true;
 	} catch (error) {
 		console.error('Error in handleClipObsidian:', error);
-		showError(error instanceof BridgeAuthenticationError ? error.message : 'failedToSaveFile');
-		throw error;
+		const message = error instanceof BridgeProtocolError
+			? 'A versão da ponte é incompatível. Atualize o plugin Corebrain e a extensão.'
+			: error instanceof BridgeAuthenticationError || error instanceof BridgeUnverifiedError
+				? 'Não foi possível verificar o pareamento. Confira o token nas configurações e tente novamente.'
+				: 'Não foi possível confirmar a gravação. Confira se o Corebrain está aberto e tente novamente.';
+		mostrarErroDeCaptura(message);
+		return false;
+	} finally {
+		botao?.classList.remove('clipping');
+		clipEmAndamento = false;
 	}
 }
 
